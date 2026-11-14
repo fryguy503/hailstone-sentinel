@@ -1,0 +1,14 @@
+/build*/
+/release/
+/stage/
+/artifacts/
+*.secret
+*.key
+*.pdb
+*.exe
+*.obj
+*.lib
+*.dll
+*.exp
+*.ilk
+__pycache__/

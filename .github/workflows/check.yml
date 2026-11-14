@@ -1,0 +1,28 @@
+name: Check Sentinel
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_CONFIGURATION=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Test native code
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Test migration and packaging
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Install Lua
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y lua5.4
+      - name: Check both UI packs
+        if: runner.os == 'Linux'
+        run: lua5.4 tools/check_ui.lua
