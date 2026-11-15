@@ -6,4 +6,4 @@ author Fryguy
 description Personal alerts for health, buffs, combat and chat.
 min_client 0.7.0-beta
 caps read,commands,events,ui
-package windows-x64 356970 8ce5fc69685ea4c7592381f50c6940632af695ffe171c9aeea97e99ec097f0bd https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.2/sentinel-1.0.0-preview.2-windows-x64.zip
+package windows-x64 356946 f36a8f19884948e61cf298611e8df8c78dd6cd4764d14329cb65e04184a39e46 https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.2/sentinel-1.0.0-preview.2-windows-x64.zip

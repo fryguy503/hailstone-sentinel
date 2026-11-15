@@ -150,6 +150,10 @@ if arg[2]~='inherit' then
   assert(background[1]==palette.chatBg[1],'overlay must use the active chat background')
   assert(theme_calls>0,'active pack theme was not loaded')
   if not is_gamepad then assert(style_calls>0,'Modern host style was not used') end
+  rule.color='white';rule.message='Readable light-theme message'
+  frame('Starter kits')
+  local message=textcolors[rule.message]
+  assert(message and message[1]==palette.text[1],'inline message previews must stay legible on light palettes')
 end
 state.overlays={};frame();state.open=false;frame()
 local compact

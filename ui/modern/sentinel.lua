@@ -344,7 +344,7 @@ local function details(a)
   gap(16); tint(C.accent,"WHEN"); ui.TextWrapped(description(a)); gap(5)
   ui.TextWrapped(event_for(a.event).help or "")
   gap(14); tint(C.accent,"THEN"); ui.TextWrapped(sentence(a))
-  if a.message and a.message~="" then gap(8); tint(color(a.color),a.message) end
+  if a.message and a.message~="" then gap(8);ui.TextWrapped(a.message) end
   gap(14); line(); gap(6)
   local function detail(k,v) muted(k);ui.SameLine(125*scale);ui.Text(v) end
   detail("Cooldown",number(a.cooldown or 0).." seconds")
@@ -422,7 +422,7 @@ local function presets()
     if primary("Customize this alert",180*scale) then local d=copy(a);d.id=nil;newdraft(d) end
     gap(8);tint(C.heading,"When");ui.TextWrapped(description(a))
     gap(8);tint(C.heading,"Notifications");ui.TextWrapped(sentence(a))
-    if a.message and a.message~="" then gap(6);tint(color(a.color),a.message) end
+    if a.message and a.message~="" then gap(6);ui.TextWrapped(a.message) end
     gap(8);line();gap(5)
     ui.TextWrapped("Customize opens an editable draft. Review the rule, adjust its notifications, then save it to your alerts.")
     if ui.Button("Preview starter") then result(P.preview(a),"Starter preview sent.") end
@@ -436,7 +436,7 @@ local function activity()
   if #(st.history or {})==0 then gap(20); tint(C.accent,"Nothing to report. You're all caught up."); ui.TextWrapped("Your alerts will appear here as they happen. Use Preview on any rule to try it out.") end
   for i,v in ipairs(st.history or {}) do
     ui.PushID("history"..i)
-    tint(color(v.color),v.name or "Alert")
+    tint(C.heading,v.name or "Alert")
     ui.SameLine(); muted(v.test and "PREVIEW" or "LIVE")
     if v.time and v.time~="" then ui.SameLine(); muted(v.time) end
     ui.TextWrapped(v.message or ""); gap(5); line(); gap(5)
