@@ -1,9 +1,9 @@
 hailstone-addon 1
 name sentinel
 kind plugin
-version 1.0.0-preview.1
+version 1.0.0-preview.2
 author Fryguy
 description Personal alerts for health, buffs, combat and chat.
 min_client 0.7.0-beta
 caps read,commands,events,ui
-package windows-x64 356160 4b7d0e6e02c5068acf4b44491f0e2d33796afdcd08ab2321a81bfbfa8649bc1a https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.1/sentinel-1.0.0-preview.1-windows-x64.zip
+package windows-x64 356970 8ce5fc69685ea4c7592381f50c6940632af695ffe171c9aeea97e99ec097f0bd https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.2/sentinel-1.0.0-preview.2-windows-x64.zip

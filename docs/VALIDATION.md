@@ -14,6 +14,12 @@ The initial Windows x64 preview was built locally with MSVC in Release mode. The
 
 The development preview runs the shipped Lua against real Dear ImGui layout and draw lists, then rasterizes them to PNG. Library, editor, presets, sharing, settings, activity, HUD, and a compact Gamepad-pack layout were inspected. Preview data is invented and contains no game assets or account data. This verifies the addon layout; Hailstone chooses its own fonts and UI scale.
 
+Preview 2 additionally loads the client's actual Modern and Gamepad theme libraries,
+checks dark and daylight palettes, and renders all 30 real starter presets in the
+compact list. A saved 860×620 window and Modern UI scale 1.25 were visually checked.
+The Lua checks cover starter search/category filtering, live palette changes,
+preservation of alert colors, fallback styling, and the smaller default window.
+
 ## Still to accept in a live client
 
 - Installing/loading from the Add-ons and Plugins screens.

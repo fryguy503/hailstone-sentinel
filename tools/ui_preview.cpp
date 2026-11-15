@@ -5,12 +5,14 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "lua.hpp"
+#include "engine.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -19,6 +21,18 @@
 namespace {
 std::vector<std::pair<std::string,int>> windows;
 std::string click;
+float preview_ui_scale=1;
+ImVec2 forced_window_size{};
+bool drawing_main_window=false;
+std::string environment(const char* name) {
+#ifdef _WIN32
+  char* value=nullptr;size_t length=0;
+  if(_dupenv_s(&value,&length,name)!=0)return {};
+  std::string result=value?value:"";std::free(value);return result;
+#else
+  const char* value=std::getenv(name);return value?value:"";
+#endif
+}
 const char* S(lua_State* l,int i) {return luaL_checkstring(l,i);}
 int I(lua_State* l,int i,int d=0) {return static_cast<int>(luaL_optinteger(l,i,d));}
 float F(lua_State* l,int i,float d=0) {return static_cast<float>(luaL_optnumber(l,i,d));}
@@ -27,7 +41,7 @@ ImVec4 color(lua_State* l,int i) {return {F(l,i,1),F(l,i+1,1),F(l,i+2,1),F(l,i+3
 int ret(lua_State* l,bool b) {lua_pushboolean(l,b);return 1;}
 bool forced(const char* label) {if(click==label){click.clear();return true;}return false;}
 int window(lua_State* l) {std::string name=S(l,1);luaL_checktype(l,2,LUA_TFUNCTION);lua_pushvalue(l,2);windows.emplace_back(name,luaL_ref(l,LUA_REGISTRYINDEX));return 0;}
-int begin(lua_State* l) {bool open=B(l,2,true);bool v=ImGui::Begin(S(l,1),lua_isnoneornil(l,2)?nullptr:&open,I(l,3));lua_pushboolean(l,v);lua_pushboolean(l,open);return 2;}
+int begin(lua_State* l) {bool open=B(l,2,true);auto& style=ImGui::GetStyle();const auto menu=style.WindowMenuButtonPosition;if(B(l,4))style.WindowMenuButtonPosition=ImGuiDir_Right;if(drawing_main_window&&forced_window_size.x>0)ImGui::SetNextWindowSize(forced_window_size,ImGuiCond_Always);bool v=ImGui::Begin(S(l,1),lua_isnoneornil(l,2)?nullptr:&open,I(l,3));style.WindowMenuButtonPosition=menu;lua_pushboolean(l,v);lua_pushboolean(l,open);return 2;}
 int end(lua_State*) {ImGui::End();return 0;}
 int child(lua_State* l) {return ret(l,ImGui::BeginChild(S(l,1),{F(l,2),F(l,3)},B(l,4)?ImGuiChildFlags_Borders:0,I(l,5)));}
 int endchild(lua_State*) {ImGui::EndChild();return 0;}
@@ -60,6 +74,7 @@ int fontscale(lua_State* l) {ImGui::SetWindowFontScale(F(l,1,1));return 0;}
 int content(lua_State* l) {auto v=ImGui::GetContentRegionAvail();lua_pushnumber(l,v.x);lua_pushnumber(l,v.y);return 2;}
 int cursor(lua_State* l) {auto v=ImGui::GetCursorScreenPos();lua_pushnumber(l,v.x);lua_pushnumber(l,v.y);return 2;}
 int pos(lua_State* l) {auto v=ImGui::GetWindowPos();lua_pushnumber(l,v.x);lua_pushnumber(l,v.y);return 2;}
+int size(lua_State* l) {auto v=ImGui::GetWindowSize();lua_pushnumber(l,v.x);lua_pushnumber(l,v.y);return 2;}
 int setcursor(lua_State* l) {ImGui::SetCursorScreenPos({F(l,1),F(l,2)});return 0;}
 int nextwidth(lua_State* l) {ImGui::SetNextItemWidth(F(l,1));return 0;}
 int sameline(lua_State* l) {ImGui::SameLine(F(l,1),F(l,2,-1));return 0;}
@@ -74,7 +89,10 @@ int windowhover(lua_State* l) {return ret(l,ImGui::IsWindowHovered());}
 int tooltip(lua_State* l) {ImGui::SetTooltip("%s",S(l,1));return 0;}
 int mousedown(lua_State* l) {return ret(l,ImGui::IsMouseDown(I(l,1)));}
 int mousereleased(lua_State* l) {return ret(l,ImGui::IsMouseReleased(I(l,1)));}
-int io(lua_State* l) {lua_newtable(l);lua_pushnumber(l,ImGui::GetIO().DisplaySize.x);lua_setfield(l,-2,"width");lua_pushnumber(l,ImGui::GetIO().DisplaySize.y);lua_setfield(l,-2,"height");return 1;}
+int io(lua_State* l) {lua_newtable(l);lua_pushnumber(l,ImGui::GetIO().DisplaySize.x);lua_setfield(l,-2,"width");lua_pushnumber(l,ImGui::GetIO().DisplaySize.y);lua_setfield(l,-2,"height");lua_pushnumber(l,preview_ui_scale);lua_setfield(l,-2,"uiScale");return 1;}
+int framecount(lua_State* l) {lua_pushinteger(l,ImGui::GetFrameCount());return 1;}
+int time(lua_State* l) {lua_pushnumber(l,ImGui::GetTime());return 1;}
+int calcsize(lua_State* l) {const auto v=ImGui::CalcTextSize(S(l,1));lua_pushnumber(l,v.x);lua_pushnumber(l,v.y);return 2;}
 int drawrect(lua_State* l) {ImGui::GetWindowDrawList()->AddRectFilled({F(l,1),F(l,2)},{F(l,3),F(l,4)},ImGui::GetColorU32(color(l,5)),F(l,9));return 0;}
 int gradient(lua_State* l) {auto a=ImGui::GetColorU32(color(l,5)),b=ImGui::GetColorU32(color(l,9));ImGui::GetWindowDrawList()->AddRectFilledMultiColor({F(l,1),F(l,2)},{F(l,3),F(l,4)},a,a,b,b);return 0;}
 int drawline(lua_State* l) {ImGui::GetWindowDrawList()->AddLine({F(l,1),F(l,2)},{F(l,3),F(l,4)},ImGui::GetColorU32(color(l,5)),F(l,9,1));return 0;}
@@ -88,20 +106,43 @@ void bindings(lua_State* l) {
   {"InputText",input},{"InputTextWithHint",inputhint},{"InputTextMultiline",multiline},{"BeginCombo",combo},{"EndCombo",endcombo},{"CollapsingHeader",collapse},
   {"PushStyleColor",pushcolor},{"PopStyleColor",popcolor},{"PushStyleVar",pushvar},{"PopStyleVar",popvar},
   {"SetNextWindowSize",nextsize},{"SetNextWindowPos",nextpos},{"SetNextWindowBgAlpha",nextalpha},{"SetWindowFontScale",fontscale},
-  {"GetContentRegionAvail",content},{"GetCursorScreenPos",cursor},{"GetWindowPos",pos},{"SetCursorScreenPos",setcursor},{"SetNextItemWidth",nextwidth},
+  {"GetContentRegionAvail",content},{"GetCursorScreenPos",cursor},{"GetWindowPos",pos},{"GetWindowSize",size},{"SetCursorScreenPos",setcursor},{"SetNextItemWidth",nextwidth},
   {"SameLine",sameline},{"Dummy",dummy},{"Separator",separator},{"PushID",pushid},{"PopID",popid},{"PushTextWrapPos",pushwrap},{"PopTextWrapPos",popwrap},
-  {"IsItemHovered",hover},{"IsWindowHovered",windowhover},{"SetTooltip",tooltip},{"IsMouseDown",mousedown},{"IsMouseReleased",mousereleased},{"GetIO",io},
+  {"IsItemHovered",hover},{"IsWindowHovered",windowhover},{"SetTooltip",tooltip},{"IsMouseDown",mousedown},{"IsMouseReleased",mousereleased},{"GetIO",io},{"GetFrameCount",framecount},{"GetTime",time},{"CalcTextSize",calcsize},
   {"DrawRectFilled",drawrect},{"DrawRectGradient",gradient},{"DrawLine",drawline},{"DrawCircle",circle},{"DrawCircleFilled",circfill},{nullptr,nullptr}};
   luaL_newlib(l,fns);
 #define COL(n) {#n,ImGuiCol_##n}
-  constants(l,"Col",{COL(Text),COL(TextDisabled),COL(WindowBg),COL(ChildBg),COL(PopupBg),COL(Border),COL(FrameBg),COL(FrameBgHovered),COL(FrameBgActive),COL(Button),COL(ButtonHovered),COL(ButtonActive),COL(Header),COL(HeaderHovered),COL(HeaderActive),COL(CheckMark),COL(SliderGrab),COL(SliderGrabActive),COL(Separator),COL(TitleBg),COL(TitleBgActive),COL(ScrollbarBg),COL(ScrollbarGrab),COL(TextSelectedBg)});
+  constants(l,"Col",{COL(Text),COL(TextDisabled),COL(WindowBg),COL(ChildBg),COL(PopupBg),COL(Border),COL(BorderShadow),
+    COL(FrameBg),COL(FrameBgHovered),COL(FrameBgActive),COL(Button),COL(ButtonHovered),COL(ButtonActive),COL(Header),COL(HeaderHovered),COL(HeaderActive),
+    COL(CheckMark),COL(SliderGrab),COL(SliderGrabActive),COL(Separator),COL(SeparatorHovered),COL(SeparatorActive),COL(TitleBg),COL(TitleBgActive),COL(TitleBgCollapsed),
+    COL(MenuBarBg),COL(ScrollbarBg),COL(ScrollbarGrab),COL(ScrollbarGrabHovered),COL(ScrollbarGrabActive),COL(ResizeGrip),COL(ResizeGripHovered),COL(ResizeGripActive),
+    COL(Tab),COL(TabHovered),COL(TabSelected),COL(TabSelectedOverline),COL(TabDimmed),COL(TabDimmedSelected),COL(PlotHistogram),COL(PlotHistogramHovered),
+    COL(TableHeaderBg),COL(TableBorderStrong),COL(TableBorderLight),COL(TableRowBg),COL(TableRowBgAlt),COL(TextSelectedBg),COL(NavCursor),COL(ModalWindowDimBg)});
 #define VAR(n) {#n,ImGuiStyleVar_##n}
-  constants(l,"StyleVar",{VAR(WindowPadding),VAR(FramePadding),VAR(ItemSpacing),VAR(FrameRounding),VAR(ChildRounding),VAR(WindowRounding)});
+  constants(l,"StyleVar",{VAR(Alpha),VAR(DisabledAlpha),VAR(WindowPadding),VAR(FramePadding),VAR(ItemSpacing),VAR(ItemInnerSpacing),
+    VAR(FrameRounding),VAR(ChildRounding),VAR(WindowRounding),VAR(PopupRounding),VAR(ScrollbarRounding),VAR(GrabRounding),VAR(TabRounding),
+    VAR(WindowBorderSize),VAR(ChildBorderSize),VAR(FrameBorderSize),VAR(PopupBorderSize),VAR(ScrollbarSize),VAR(WindowTitleAlign),VAR(TabBarBorderSize),
+    VAR(CellPadding),VAR(GrabMinSize),VAR(SeparatorTextBorderSize)});
 #define FLAG(n) {#n,ImGuiWindowFlags_##n}
-  constants(l,"WindowFlags",{FLAG(NoCollapse),FLAG(NoDecoration),FLAG(NoSavedSettings),FLAG(NoFocusOnAppearing),FLAG(NoBringToFrontOnFocus),FLAG(NoInputs),FLAG(NoMove)});
-  constants(l,"Cond",{{"Always",ImGuiCond_Always},{"FirstUseEver",ImGuiCond_FirstUseEver}});
+  constants(l,"WindowFlags",{FLAG(NoCollapse),FLAG(NoDecoration),FLAG(NoSavedSettings),FLAG(NoFocusOnAppearing),FLAG(NoBringToFrontOnFocus),FLAG(NoInputs),FLAG(NoMove),
+    FLAG(NoTitleBar),FLAG(NoResize),FLAG(NoScrollbar),FLAG(NoScrollWithMouse),FLAG(AlwaysAutoResize),FLAG(NoBackground),FLAG(MenuBar)});
+  constants(l,"Cond",{{"Always",ImGuiCond_Always},{"Once",ImGuiCond_Once},{"FirstUseEver",ImGuiCond_FirstUseEver},{"Appearing",ImGuiCond_Appearing}});
   constants(l,"InputTextFlags",{{"CharsDecimal",ImGuiInputTextFlags_CharsDecimal},{"ReadOnly",ImGuiInputTextFlags_ReadOnly}});
   lua_setglobal(l,"ui");
+}
+void push_json(lua_State* l,const sentinel::Json& value,int depth=0) {
+  if(depth>16)throw std::runtime_error("Preview data exceeds nesting limit");
+  if(value.is_array()) {
+    lua_createtable(l,static_cast<int>(value.size()),0);lua_Integer index=1;
+    for(const auto& item:value){push_json(l,item,depth+1);lua_rawseti(l,-2,index++);}
+  }else if(value.is_object()) {
+    lua_createtable(l,0,static_cast<int>(value.size()));
+    for(const auto& [key,item]:value.items()){push_json(l,item,depth+1);lua_setfield(l,-2,key.c_str());}
+  }else if(value.is_boolean())lua_pushboolean(l,value.get<bool>());
+  else if(value.is_number_integer())lua_pushinteger(l,value.get<lua_Integer>());
+  else if(value.is_number())lua_pushnumber(l,value.get<lua_Number>());
+  else if(value.is_string()){const auto& text=value.get_ref<const std::string&>();lua_pushlstring(l,text.data(),text.size());}
+  else lua_pushnil(l);
 }
 void check(lua_State* l,int status) {if(status!=LUA_OK){throw std::runtime_error(lua_tostring(l,-1));}}
 float edge(ImVec2 a,ImVec2 b,ImVec2 p) {return (b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x);}
@@ -127,22 +168,34 @@ int main(int argc,char**argv) {
   try{
     const std::string mode=argc>4?argv[4]:"library";
     const int width=argc>5?std::stoi(argv[5]):1280,height=argc>6?std::stoi(argv[6]):900;
+    const auto scale=environment("HAILSTONE_UI_SCALE");if(!scale.empty())preview_ui_scale=std::clamp(std::stof(scale),.5f,3.f);
+    const auto saved=environment("SENTINEL_PREVIEW_WINDOW");
+    if(const auto separator=saved.find('x');separator!=std::string::npos)
+      forced_window_size={static_cast<float>(std::clamp(std::stoi(saved.substr(0,separator)),240,4096)),static_cast<float>(std::clamp(std::stoi(saved.substr(separator+1)),200,4096))};
     ImGui::CreateContext();auto& io=ImGui::GetIO();io.DisplaySize={float(width),float(height)};io.DeltaTime=1.f/60;io.IniFilename=nullptr;io.LogFilename=nullptr;
     ImFontConfig fc;fc.OversampleH=2;fc.OversampleV=2;
 #ifdef _WIN32
-    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf",18,&fc);
+    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf",18*preview_ui_scale,&fc);
 #else
-    io.Fonts->AddFontDefault();
+    fc.SizePixels=13*preview_ui_scale;io.Fonts->AddFontDefault(&fc);
 #endif
     unsigned char* pixels;int tw,th;io.Fonts->GetTexDataAsRGBA32(&pixels,&tw,&th);io.Fonts->SetTexID(static_cast<ImTextureID>(1));
     l=luaL_newstate();luaL_openlibs(l);bindings(l);lua_pushstring(l,mode.c_str());lua_setglobal(l,"PREVIEW_MODE");
+    push_json(l,sentinel::events());lua_setglobal(l,"PREVIEW_CATALOG");
+    push_json(l,sentinel::presets());lua_setglobal(l,"PREVIEW_PRESETS");
     check(l,luaL_dofile(l,argv[2]));check(l,luaL_dofile(l,argv[1]));
+    if(!environment("HAILSTONE_UI_DIR").empty()) {
+      lua_getglobal(l,"PREVIEW_THEME");const bool loaded=lua_istable(l,-1);lua_pop(l,1);
+      if(!loaded)throw std::runtime_error("Requested host UI theme did not load; refusing a fallback screenshot.");
+    }
     for(int frame=0;frame<5;++frame){
       if(frame==1){if(mode=="library"||mode=="editor")click="  Critical health##a1";else if(mode=="presets")click="Starter kits";else if(mode=="sharing")click="Share & import";else if(mode=="settings")click="Settings & help";else if(mode=="activity")click="Activity";}
       if(frame==2&&mode=="editor")click="Edit alert";
       if(frame==2&&mode=="sharing")click="Export all alerts";
       ImGui::NewFrame();
-      for(auto [name,ref]:windows){if(name=="Sentinel")ImGui::SetNextWindowPos({55,50},ImGuiCond_FirstUseEver);lua_rawgeti(l,LUA_REGISTRYINDEX,ref);check(l,lua_pcall(l,0,0,0));}
+      for(auto [name,ref]:windows){drawing_main_window=name=="Sentinel";
+        if(drawing_main_window)ImGui::SetNextWindowPos({55,50},ImGuiCond_FirstUseEver);
+        lua_rawgeti(l,LUA_REGISTRYINDEX,ref);check(l,lua_pcall(l,0,0,0));drawing_main_window=false;}
       ImGui::Render();
     }
     render(argv[3],width,height);lua_close(l);ImGui::DestroyContext();std::cout<<"Rendered actual Lua UI: "<<mode<<" -> "<<argv[3]<<"\n";return 0;

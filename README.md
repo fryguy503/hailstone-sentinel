@@ -6,6 +6,10 @@ It is a standalone addon. Your custom DLL is not required.
 
 ![Sentinel alert library](docs/sentinel-preview.png)
 
+Starter kits now use a compact, searchable list:
+
+![Compact starter kits](docs/starter-kits.png)
+
 ## Get started
 
 1. Open **Add-ons** on Hailstone's login screen.
@@ -20,6 +24,7 @@ The first package is a **Windows x64 preview**, for Hailstone **0.7.0-beta or ne
 
 - **23 event types.** Health, mana, endurance, party and pet warnings, buffs, nearby spawns, target casts, chat channels, custom text patterns, fizzles, resists, and invisibility warnings.
 - **A guided rule builder.** Choose a trigger, pick notification styles, and read a plain-language summary before saving.
+- **A familiar, compact window.** Follows your active client theme and palette. Starter kits use a searchable list with details for the selected preset.
 - **A searchable library.** Organize up to 128 alerts with categories, sections, subsections, and optional zone restrictions.
 - **Notifications that fit the moment.** Colored banners in five sizes, local chat, five built-in chimes, custom WAV files, and Windows system speech.
 - **A comfortable HUD.** Move the banner stack, lock it in place, or mute audio with Quiet mode. Master Pause stops automatic alerts while preserving your library.

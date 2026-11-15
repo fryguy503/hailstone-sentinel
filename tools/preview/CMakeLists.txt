@@ -8,7 +8,8 @@ if(NOT EXISTS "${IMGUI_SOURCE_DIR}/imgui.cpp" OR NOT EXISTS "${STB_INCLUDE_DIR}/
 endif()
 find_package(Lua 5.4 REQUIRED)
 add_executable(ui_preview ../ui_preview.cpp
+  ../../src/engine.cpp
   "${IMGUI_SOURCE_DIR}/imgui.cpp" "${IMGUI_SOURCE_DIR}/imgui_draw.cpp"
   "${IMGUI_SOURCE_DIR}/imgui_tables.cpp" "${IMGUI_SOURCE_DIR}/imgui_widgets.cpp")
-target_include_directories(ui_preview PRIVATE "${IMGUI_SOURCE_DIR}" "${STB_INCLUDE_DIR}" "${LUA_INCLUDE_DIR}")
+target_include_directories(ui_preview PRIVATE "${IMGUI_SOURCE_DIR}" "${STB_INCLUDE_DIR}" "${LUA_INCLUDE_DIR}" ../../src ../../vendor)
 target_link_libraries(ui_preview PRIVATE ${LUA_LIBRARIES})

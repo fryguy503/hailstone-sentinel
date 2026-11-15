@@ -50,7 +50,7 @@ def package(build, version, platform, out):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--build-dir", type=pathlib.Path, default=ROOT / "build")
-    p.add_argument("--version", default="1.0.0-preview.1")
+    p.add_argument("--version", default="1.0.0-preview.2")
     p.add_argument("--platform", default="windows-x64")
     p.add_argument("--out", type=pathlib.Path, default=ROOT / "release")
     p.add_argument("--sign-tool", type=pathlib.Path)

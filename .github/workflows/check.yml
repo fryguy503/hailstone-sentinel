@@ -25,4 +25,6 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y lua5.4
       - name: Check both UI packs
         if: runner.os == 'Linux'
-        run: lua5.4 tools/check_ui.lua
+        run: |
+          lua5.4 tools/check_ui.lua ui/modern/sentinel.lua
+          lua5.4 tools/check_ui.lua ui/gamepad/sentinel.lua

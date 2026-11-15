@@ -10,7 +10,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 lua tools/check_ui.lua
 python -m unittest discover -s tests -p "test_*.py"
-python tools/package.py --build-dir build --version 1.0.0-preview.1 --platform windows-x64 --root-manifest
+python tools/package.py --build-dir build --version 1.0.0-preview.2 --platform windows-x64 --out release/v1.0.0-preview.2 --root-manifest
 ```
 
 The Release DLL uses the static MSVC runtime. `release/` contains the deterministic ZIP and its `hailstone-addon.txt` manifest. `--root-manifest` also writes the repository-level manifest with an absolute release asset URL, so the repository link works for preview releases. Do not commit build output or private signing keys. Optional `--sign-tool <hailstone_sign>` and `--sign-key <existing-secret-file>` sign the manifests; keep using the same key after players pin it.

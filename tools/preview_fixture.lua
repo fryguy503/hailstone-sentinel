@@ -1,5 +1,6 @@
 -- SPDX-License-Identifier: MIT
 -- Invented preview data. No accounts, server captures, or game assets are used.
+dofile("tools/preview_theme.lua")
 local function rule(id,name,event,color,threshold,section)
   return {id=id,name=name,event=event,color=color,threshold=threshold,enabled=true,category="Personal",section=section or "Survival",
     subsection="",zone_id=0,subject="",message="",cooldown=10,chat=true,overlay=true,sound=true,speech=false,
@@ -24,6 +25,8 @@ for _,v in ipairs({a,b,c,d,e}) do local r={};for k,x in pairs(v) do r[k]=x end;r
 presets[1].description="A clear emergency warning at 15% health."
 presets[2].description="Know when your mana reserve is running low."
 presets[3].description="Warn when your pet reaches 35% health."
+catalog=PREVIEW_CATALOG or catalog
+presets=PREVIEW_PRESETS or presets
 local state={open=PREVIEW_MODE~="overlay",enabled=true,in_zone=true,character="Elowen",zone_id=2,zone_name="Northern Qeynos",alerts={a,b,c,d,e},
   catalog=catalog,presets=presets,history={{name="Critical health",message="HEAL ME NOW",time="14:32:08",test=true,color="red"},
   {name="Low mana",message="Your mana is at 20%",time="14:25:13",test=false,color="cyan"},
