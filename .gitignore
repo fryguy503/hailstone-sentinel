@@ -11,4 +11,8 @@
 *.dll
 *.exp
 *.ilk
+*.so
+*.dylib
+*.o
+*.a
 __pycache__/

@@ -18,7 +18,7 @@ Starter kits now use a compact, searchable list:
 4. Open **Sentinel alerts** from the game menu, or type `/sentinel`.
 5. Choose **Starter kits**, customize an alert, and press **Preview** before saving.
 
-The first package is a **Windows x64 preview**, for Hailstone **0.7.0-beta or newer** using SDK ABI 3. It is unsigned; Hailstone identifies this during installation. If Hailstone cannot find a preview release automatically, paste that release's tag link from the repository's Releases page. Use Hailstone's Plugins controls to keep the plugin enabled for your character.
+Packages are available for **Windows x64**, **Linux x64**, and **macOS Apple Silicon (arm64, macOS 13.3 or newer)**, for Hailstone **0.7.0-beta or newer** using SDK ABI 3. The addon manager chooses your platform automatically. The addon manifest is unsigned; the Mac library is ad-hoc signed and is not notarized. If Hailstone cannot find a preview release automatically, paste that release's tag link from the repository's Releases page. Use Hailstone's Plugins controls to keep the plugin enabled for your character.
 
 ## Make it yours
 
@@ -26,7 +26,7 @@ The first package is a **Windows x64 preview**, for Hailstone **0.7.0-beta or ne
 - **A guided rule builder.** Choose a trigger, pick notification styles, and read a plain-language summary before saving.
 - **A familiar, compact window.** Follows your active client theme and palette. Starter kits use a searchable list with details for the selected preset.
 - **A searchable library.** Organize up to 128 alerts with categories, sections, subsections, and optional zone restrictions.
-- **Notifications that fit the moment.** Colored banners in five sizes, local chat, five built-in chimes, custom WAV files, and Windows system speech.
+- **Notifications that fit the moment.** Colored banners in five sizes, local chat, five built-in chimes, custom WAV files, and platform speech.
 - **A comfortable HUD.** Move the banner stack, lock it in place, or mute audio with Quiet mode. Master Pause stops automatic alerts while preserving your library.
 - **Remembered window visibility.** Sentinel opens on first use, then keeps your last open or closed state through zoning and reloads.
 - **Activity history.** Review the last 100 notifications, with previews clearly marked.
@@ -67,7 +67,9 @@ In messages or speech, use `{C}` for your character, `{L}` for the matching line
 
 Place custom WAV files in **Sounds beside your character's Sentinel `config.json`**, then click **Rescan sounds**. Settings & help shows the exact settings path. Supported WAVs are PCM 16-bit, mono or stereo, 8–96 kHz, at most 30 seconds and 16 MiB. An unreadable WAV falls back to a built-in tone. Each rule has its own volume.
 
-Speech uses up to two installed Windows SAPI voices, with adjustable rate and optional separate wording. Linux and macOS source builds currently provide visual and chat alerts; native audio backends for those systems are not implemented.
+Chimes and custom WAV playback work on all three platforms. Windows uses its native audio APIs; Linux and macOS use the bundled miniaudio backend with the system's output device. Audio availability reflects whether an output device can be opened.
+
+Speech uses installed system voices on Windows and macOS, with adjustable volume, rate, and optional separate wording. Linux speech is optional: install `espeak-ng` (or `espeak`) with your distribution's package manager. The default voice is the utility's default; Alternate uses its English `en+f3` variant. Linux invokes the utility directly without a shell and stops only its own speech process when an alert is cancelled. Missing speech support leaves the other notification outputs available.
 
 In **Share & import**, select export text and use Ctrl+C. Paste a shared collection with Ctrl+V, choose **Review import**, and add the reviewed alerts. Enable each imported rule after checking it. Sharing uses ordinary text and does not require Bastion's server-specific raid-sharing protocol. Imports contain data only and cannot run commands or code.
 
@@ -89,7 +91,7 @@ python tools/convert_legacy.py path/to/CitadelCharacter.ini --out sentinel-impor
 
 ## What to expect from the preview
 
-The addon has automated rule, SDK adapter, persistence, import, and UI checks, plus rendered UI verification. **Live gameplay and physical audio acceptance are still needed.**
+The addon has automated rule, SDK adapter, persistence, import, audio-data, speech-process, and UI checks, plus rendered UI verification. CI builds and tests native Windows x64, Linux x64, and macOS arm64 packages. **Live gameplay and audible output acceptance on actual Linux and Mac systems are still needed.**
 
 Sentinel uses information the server supplies. Other players' mana may be unavailable; absent readings are ignored. Group checks cover members present in your zone. Target casts are sampled every 100 ms, so a very short cast may be missed. Channel alerts recognize the standard English chat envelopes because Hailstone 0.7 passes RGB rather than channel metadata to native chat callbacks. Custom patterns can be used for localized text.
 

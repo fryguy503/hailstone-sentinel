@@ -1,6 +1,6 @@
 # Preview validation
 
-The initial Windows x64 preview was built locally with MSVC in Release mode. The standalone DLL uses the public Hailstone SDK only, with the static C++ runtime. Its runtime imports are Windows system libraries.
+The Windows x64 preview is built locally and in CI with MSVC in Release mode. Linux x64 and macOS arm64 are built and tested on native CI runners. The addon uses the public Hailstone SDK only. Windows uses the static C++ runtime and system audio APIs; Linux/macOS statically include miniaudio's playback backend, with native Mac speech and optional Linux speech utilities.
 
 ## Automated coverage
 
@@ -9,6 +9,9 @@ The initial Windows x64 preview was built locally with MSVC in Release mode. The
 - Window visibility: first-use opening, open/closed state through zone callbacks and full plugin unload/reload, explicit command/UI actions, and character switching before creating alerts.
 - UI: both packs compile as Lua; scripted traversal covers editing/cancel/preview, presets, activity, sharing/review/import, failed export, comfort settings, and locked/unlocked overlays. Window and style stacks balance after each frame.
 - Python: migration fixtures and deterministic archive/manifest integrity.
+- Portable audio data: signed mono/stereo PCM, RIFF boundaries and invalid headers, bounded duration/file size, generated tones, and volume clamping without requiring an audio device.
+- Linux speech: literal argv transport, process exit handling, and cancellation/reaping of an owned test child, without invoking a shell or real speech utility.
+- macOS: native arm64 compilation/linking, ad-hoc signature verification, system-library inspection, and silent speech availability/cancellation guards. Silent guards do not prove audible speech or device output.
 - Package: ZIP shape, Lua syntax, manifest size/SHA-256, and independent validation against Hailstone's official addon packaging rules.
 
 ## Visual checks
@@ -29,4 +32,4 @@ preservation of alert colors, fallback styling, and the smaller default window.
 - Zoning, character switching, UI reload, and overlay positioning with real screen scale and input devices.
 - Physical controller use of the Gamepad pack.
 
-Local tests and fixture screenshots do not establish live gameplay or hardware acceptance. Linux CI checks portability of source and tests; this release packages Windows x64 only.
+Local tests, CI, and fixture screenshots do not establish live gameplay or hardware acceptance. All three platforms have addon packages; audible playback and speech on real Linux/Mac hardware remain acceptance checks.

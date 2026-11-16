@@ -2,6 +2,7 @@
 
 - **Hailstone public SDK**, copyright 2026 gennro and the Hailstone contributors, MIT. `sdk/hailstone_plugin.h` and `sdk/LICENSE` are an unchanged public SDK snapshot (ABI 3) from Hailstone commit `9f6226a86982380440da561cf80dbc2e86868674`. The plugin includes no client internal headers.
 - **JSON for Modern C++ 3.11.2**, copyright 2013–2022 Niels Lohmann, MIT. `vendor/json.hpp` retains its original copyright and license notices. Upstream: https://github.com/nlohmann/json.
+- **miniaudio 0.11.26**, copyright David Reid, used under its MIT No Attribution (MIT-0) license option. `vendor/miniaudio.h` and `vendor/miniaudio-LICENSE` are pinned to upstream commit `877ea4a7c2601c7b0f2a44e83dfac42e6470fea6`. Header SHA-256: `6b376c7fbb1352ba1e0e432ab66069b335ea9405e45cb6c30b97ef0f3c9c3e0e`. Upstream: https://github.com/mackron/miniaudio. Only its playback device backend is compiled into Linux/macOS packages; no separate miniaudio library is shipped.
 - The optional UI preview tool uses an externally supplied **Dear ImGui** source tree and **Lua** installation. Neither library's source or binary is distributed in the Sentinel addon package. Respect their MIT license notices when redistributing a preview tool build.
 
 Sentinel is a new standalone implementation of the user's alert feature. No game assets, proprietary UI files, or client-memory offsets are included. Native sound tones and interface geometry are created by this project.

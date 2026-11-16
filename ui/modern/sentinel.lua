@@ -242,7 +242,7 @@ local function editor()
   end
   if draft.sound then
     gap(5)
-    if not st.audio_available then tint(C.warning,"Audio is unavailable on this build; visual and chat alerts still work.") end
+    if not st.audio_available then tint(C.warning,"No audio output is available right now. Banners and chat messages still work.") end
     field("Sound"); draft.tone=combo("##tone",TONES,draft.tone or "alert")
     field("Custom WAV file (optional)")
     local sounds={{"","Use built-in sound"}}
@@ -254,7 +254,7 @@ local function editor()
   end
   if draft.speech then
     gap(5)
-    if not st.speech_available then tint(C.warning,"Speech is unavailable on this platform. Other outputs will still work.") end
+    if not st.speech_available then tint(C.warning,"Speech is unavailable right now. Check Custom sounds and speech in Settings & help.") end
     field("Spoken message (empty uses the alert message)")
     draft.speech_text=textfield("##speech",draft.speech_text,"Time to heal",1024)
     field("Voice"); draft.voice=combo("##voice",{{0,"System default"},{1,"Alternate system voice"}},draft.voice or 0)
@@ -497,8 +497,10 @@ local function settings()
   if ui.CollapsingHeader("Custom sounds and speech",0) then
     ui.TextWrapped("Place WAV files in the Sounds folder beside this character's Sentinel settings, then use Rescan sounds in the rule builder. Select a file for your rule. Short, recognizable sounds work best.")
     ui.TextWrapped(sounds_path())
-    ui.TextWrapped("Speech uses installed Windows SAPI voices. Speech is currently unavailable on Linux and macOS; visual and chat alerts work independently.")
-    muted("Audio: "..(st.audio_available and "available" or "unavailable").."   /   Speech: "..(st.speech_available and "available" or "unavailable"))
+    ui.TextWrapped("Sounds use your system's audio output on Windows, Linux, and macOS. Connect an audio device if no output is available.")
+    ui.TextWrapped("Speech uses Windows or macOS system voices. On Linux, install espeak-ng or espeak through your system's package manager to enable speech.")
+    ui.TextWrapped("Default and Alternate use the voices available on your system. Banners and chat messages work even when sound or speech is unavailable.")
+    muted("Audio output: "..(st.audio_available and "available" or "unavailable").."   /   Speech: "..(st.speech_available and "available" or "unavailable"))
   end
   if ui.CollapsingHeader("Sharing and your settings",0) then
     ui.TextWrapped("Sharing exports alert settings as text. Review imports before adding them; imported alerts begin paused. Your existing rules stay in your watchlist. Rules are saved separately for each server and character.")

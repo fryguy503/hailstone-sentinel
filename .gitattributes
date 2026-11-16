@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.png binary
 *.zip binary
+# Preserve the pinned upstream bytes, including its existing whitespace.
+vendor/miniaudio.h -text -whitespace

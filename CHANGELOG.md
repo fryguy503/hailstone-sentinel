@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-preview.4
+
+- Add native Linux x64 and macOS Apple Silicon addon packages alongside Windows x64.
+- Support built-in tones and custom WAV playback on Linux and Mac, native Mac speech, and optional Linux speech through espeak-ng/espeak.
+- Build/test all three platforms in CI and publish one manifest that selects the matching package.
+- Verify and ad-hoc sign the arm64 Mac library. Preserve existing alert settings and remembered window visibility.
+
 ## 1.0.0-preview.3
 
 - Open Sentinel on first use, then remember the last open or closed state across zoning, plugin reloads, restarts, and character changes.
