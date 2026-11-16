@@ -28,6 +28,7 @@ The first package is a **Windows x64 preview**, for Hailstone **0.7.0-beta or ne
 - **A searchable library.** Organize up to 128 alerts with categories, sections, subsections, and optional zone restrictions.
 - **Notifications that fit the moment.** Colored banners in five sizes, local chat, five built-in chimes, custom WAV files, and Windows system speech.
 - **A comfortable HUD.** Move the banner stack, lock it in place, or mute audio with Quiet mode. Master Pause stops automatic alerts while preserving your library.
+- **Remembered window visibility.** Sentinel opens on first use, then keeps your last open or closed state through zoning and reloads.
 - **Activity history.** Review the last 100 notifications, with previews clearly marked.
 - **Reviewed sharing.** Export one rule or the library as text. Inspect incoming rules before adding them; imports always begin disabled.
 - **Separate character settings.** Each server and character has its own library. Nothing is written to your game assets folder.

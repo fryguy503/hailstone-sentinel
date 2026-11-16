@@ -6,6 +6,7 @@ The initial Windows x64 preview was built locally with MSVC in Release mode. The
 
 - Core rules: threshold edges and three-point hysteresis, invalid data, cooldowns, independent members/targets, pet baseline/loss, buffs, nearby entities, cast observations, full-line patterns, numeric comparisons, captures, templates, bounded input and reviewed sharing.
 - Fake native host: public SDK callbacks, UI serialization, commands, edits, duplication/deletion, settings reload, separate characters, disabled imports, import rejection without partial mutation, recursion, zoning, mapped remote mana and casts, compact buff/song indexes, and preserving unreadable settings.
+- Window visibility: first-use opening, open/closed state through zone callbacks and full plugin unload/reload, explicit command/UI actions, and character switching before creating alerts.
 - UI: both packs compile as Lua; scripted traversal covers editing/cancel/preview, presets, activity, sharing/review/import, failed export, comfort settings, and locked/unlocked overlays. Window and style stacks balance after each frame.
 - Python: migration fixtures and deterministic archive/manifest integrity.
 - Package: ZIP shape, Lua syntax, manifest size/SHA-256, and independent validation against Hailstone's official addon packaging rules.

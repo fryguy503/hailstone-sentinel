@@ -10,7 +10,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 lua tools/check_ui.lua
 python -m unittest discover -s tests -p "test_*.py"
-python tools/package.py --build-dir build --version 1.0.0-preview.2 --platform windows-x64 --out release/v1.0.0-preview.2 --root-manifest
+python tools/package.py --build-dir build --version 1.0.0-preview.3 --platform windows-x64 --out release/v1.0.0-preview.3 --root-manifest
 ```
 
 The Release DLL uses the static MSVC runtime. `release/` contains the deterministic ZIP and its `hailstone-addon.txt` manifest. `--root-manifest` also writes the repository-level manifest with an absolute release asset URL, so the repository link works for preview releases. Do not commit build output or private signing keys. Optional `--sign-tool <hailstone_sign>` and `--sign-key <existing-secret-file>` sign the manifests; keep using the same key after players pin it.
@@ -29,6 +29,12 @@ Linux and macOS can build the core, native plugin, and tests with the same CMake
 - `tools/`: deterministic packaging, DLL-settings migration, UI checks, optional rendered preview.
 
 Settings live under the host's character configuration directory. Writes use a temporary file followed by replacement; an unreadable original blocks saving and is left intact. Imports are capped at 128 KiB, 128 alerts, and 12 JSON nesting levels. Libraries hold at most 128 rules; settings files are bounded separately at 1 MiB. Chat patterns, matching work, audio requests, history, and overlays are bounded.
+
+Window visibility is an installation-wide preference in `ui-settings.json` under
+the host's plugin configuration directory. The first load opens the window and
+records that state; subsequent explicit show/hide actions save immediately.
+Character settings loads and zone callbacks do not change visibility. This file
+is player data and must never be included in the addon ZIP or shipped file list.
 
 ## Release checks
 

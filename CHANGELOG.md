@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-preview.3
+
+- Open Sentinel on first use, then remember the last open or closed state across zoning, plugin reloads, restarts, and character changes.
+- Save window visibility separately from character alert libraries, including when closing before creating any alerts.
+
 ## 1.0.0-preview.2
 
 - Follow the active client theme in Modern and Gamepad, including live palette changes.

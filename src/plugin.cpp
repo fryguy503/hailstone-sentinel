@@ -2,6 +2,7 @@
 #include "hailstone_plugin.h"
 #include "audio.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -15,6 +16,8 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 HAILSTONE_PLUGIN
@@ -26,9 +29,11 @@ Engine engine;
 Snapshot snapshot;
 std::unique_ptr<Audio> audio;
 fs::path folder;
-bool open=true, delivering=false, initialized=false, load_failed=false;
+fs::path window_preferences;
+bool open=false, delivering=false, initialized=false, load_failed=false;
 uint64_t revision=0, last_poll=0, next_id=0;
 std::string status="Choose a starter preset or create your first alert.", error;
+std::string window_error;
 Json history=Json::array(), overlays=Json::array();
 std::vector<std::string> sounds;
 #ifdef SENTINEL_TESTING
@@ -84,24 +89,85 @@ Json config_normalized(const Json& raw) {
     for(const auto* key:{"overlay_x","overlay_y","overlay_locked","quiet"})if(raw.contains(key))c[key]=raw[key];
     presentation_defaults(c);return c;
 }
-bool persist() {
-    if(folder.empty()){error="Enter the world before saving character alerts.";return false;}
-    if(load_failed){error="Settings could not be read. Restore or rename config.json before saving; the original has been preserved.";return false;}
+void write_atomic(const fs::path& path,const std::string& text) {
+    fs::create_directories(path.parent_path());
+    // Boxed clients share addon preferences; each write needs its own temp file.
+    static std::atomic<uint64_t> serial{0};
+#ifdef _WIN32
+    const auto process=static_cast<uint64_t>(GetCurrentProcessId());
+#else
+    const auto process=static_cast<uint64_t>(getpid());
+#endif
+    auto temp=path;temp+=".tmp-"+std::to_string(process)+"-"+std::to_string(++serial);
     try {
-        fs::create_directories(folder);
-        const auto path=folder/"config.json", temp=folder/"config.json.tmp";
-        {std::ofstream out(temp,std::ios::binary|std::ios::trunc);
-         if(!out)throw std::runtime_error("Cannot create settings file");
-         const auto text=engine.config.dump(2);
-         if(text.size()>max_config_bytes)throw std::runtime_error("Settings exceed 1 MiB");
-         out.write(text.data(),static_cast<std::streamsize>(text.size()));out.flush();
-         if(!out)throw std::runtime_error("Cannot write settings file");}
+        {
+            std::ofstream out(temp,std::ios::binary|std::ios::trunc);
+            if(!out)throw std::runtime_error("Cannot create settings file");
+            out.write(text.data(),static_cast<std::streamsize>(text.size()));out.flush();
+            if(!out)throw std::runtime_error("Cannot write settings file");
+        }
 #ifdef _WIN32
         if(!MoveFileExW(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
             throw std::runtime_error("Cannot replace settings file");
 #else
         fs::rename(temp,path);
 #endif
+    }catch(...) {
+        std::error_code ec;fs::remove(temp,ec);throw;
+    }
+}
+bool save_window_preferences() {
+    try {
+        if(window_preferences.empty())throw std::runtime_error("Addon settings folder is unavailable");
+        write_atomic(window_preferences,Json{{"version",1},{"window_open",open}}.dump(2));
+        window_error.clear();return true;
+    }catch(const std::exception& ex) {
+        window_error="Cannot remember window visibility: "+std::string(ex.what());return false;
+    }
+}
+void load_window_preferences() {
+    open=false;window_preferences.clear();window_error.clear();
+    try {
+        char path[4096]{};
+        const int n=host->config_dir?host->config_dir(host->host,path,sizeof path):0;
+        if(n<=0||static_cast<size_t>(n)>=sizeof path)throw std::runtime_error("Addon settings folder is unavailable");
+        window_preferences=fs::path(std::u8string(path,path+n))/"ui-settings.json";
+        if(!fs::exists(window_preferences)) {
+            // One first-use popup per installation, independent from character alerts.
+            open=true;
+            if(!save_window_preferences())open=false;
+            return;
+        }
+        if(fs::file_size(window_preferences)>4096)throw std::runtime_error("Window settings exceed 4 KiB");
+        std::ifstream in(window_preferences,std::ios::binary);
+        if(!in)throw std::runtime_error("Cannot open window settings");
+        const std::string text((std::istreambuf_iterator<char>(in)),{});
+        const auto prefs=Json::parse(text,[](int depth,Json::parse_event_t,Json&){
+            if(depth>4)throw std::runtime_error("Window settings are nested too deeply");
+            return true;
+        });
+        if(!prefs.is_object()||prefs.value("version",0)!=1||!prefs.contains("window_open")||!prefs["window_open"].is_boolean())
+            throw std::runtime_error("Unrecognized window settings");
+        open=prefs["window_open"].get<bool>();
+    }catch(const std::exception& ex) {
+        // Unreadable preferences must not create a popup loop. An explicit show/hide
+        // repairs only this small UI preference; character alert files stay separate.
+        window_error="Cannot restore window visibility: "+std::string(ex.what());
+    }
+}
+Json set_window_open(bool value) {
+    // Honor the click immediately even if the preference cannot be written.
+    open=value;
+    if(!save_window_preferences())return {{"ok",false},{"error",window_error}};
+    return success();
+}
+bool persist() {
+    if(folder.empty()){error="Enter the world before saving character alerts.";return false;}
+    if(load_failed){error="Settings could not be read. Restore or rename config.json before saving; the original has been preserved.";return false;}
+    try {
+        const auto text=engine.config.dump(2);
+        if(text.size()>max_config_bytes)throw std::runtime_error("Settings exceed 1 MiB");
+        write_atomic(folder/"config.json",text);
         ++revision;error.clear();return true;
     } catch(const std::exception& ex){error=ex.what();return false;}
 }
@@ -293,7 +359,7 @@ Json state() {
     char zone[128]{};if(host->zone_name)host->zone_name(host->host,snapshot.zone_id,zone,sizeof zone);
     static const auto catalog=events(), starter_presets=presets();
     result["zone_name"]=zone;result["catalog"]=catalog;result["presets"]=starter_presets;result["history"]=history;
-    result["overlays"]=showing;result["status"]=status;result["error"]=error;result["revision"]=revision;
+    result["overlays"]=showing;result["status"]=status;result["error"]=error.empty()?window_error:error;result["revision"]=revision;
     result["audio_available"]=audio&&audio->sound_available();result["speech_available"]=audio&&audio->speech_available();
     const auto path=(folder/"config.json").u8string();
     result["sounds"]=sounds;result["config_path"]=std::string(path.begin(),path.end());
@@ -301,7 +367,8 @@ Json state() {
     result["endurance"]=snapshot.endurance?Json(*snapshot.endurance):Json();return result;
 }
 Json action(const std::string& op,const std::string& id) {
-    if(op=="show"){open=true;return success();}if(op=="hide"){open=false;return success();}
+    if(op=="show")return set_window_open(true);
+    if(op=="hide")return set_window_open(false);
     if(op=="clear_history"){history.clear();return success();}
     if(op=="rescan_sounds"){sounds=Audio::files(folder/"Sounds");return success();}
     if(op=="test") {const auto* a=find(id);if(!a)return failure("Alert not found");deliver(engine.preview(*a,snapshot,now_ms()));return success();}
@@ -374,7 +441,11 @@ int ui_dispatch(void* user,const HailstoneArgs* args,HailstoneOut* out) noexcept
 void command(void*,const char* line) noexcept {
     try {
         std::istringstream input(line?line:"");std::string op;input>>op;
-        if(op.empty()||op=="show"){open=true;return;}
+        if(op.empty()||op=="show"){
+            const auto result=set_window_open(true);
+            if(!result.value("ok",false))say(result.value("error",std::string{}));
+            return;
+        }
         if(op=="list"){size_t i=0;for(const auto& a:engine.config["alerts"])say(std::to_string(++i)+". "+a.value("name",std::string{})+(a.value("enabled",true)?" [on]":" [off]"));return;}
         if(op=="test"){size_t n=0;input>>n;const auto& list=engine.config["alerts"];if(n&&n<=list.size()){deliver(engine.preview(list[n-1],snapshot,now_ms()));return;}say("Use /sentinel test <alert number>. /sentinel list shows the numbers.");return;}
         if(op=="on"||op=="off"||op=="toggle"||op=="hide"){const auto result=action(op,"");say(result.value("ok",false)?status:result.value("error",std::string{}));return;}
@@ -386,8 +457,9 @@ HAILSTONE_API void InitializePlugin() noexcept {
     try {
         if(!host||host->size<offsetof(PluginHostApi,character_config_dir)+sizeof(host->character_config_dir))return;
         if(initialized)return;
-        initialized=true;engine=Engine();presentation_defaults(engine.config);open=true;folder.clear();snapshot={};
+        initialized=true;engine=Engine();presentation_defaults(engine.config);folder.clear();snapshot={};
         history.clear();overlays.clear();error.clear();load_failed=false;last_poll=0;
+        load_window_preferences();
 #ifndef SENTINEL_NO_AUDIO
         audio=std::make_unique<sentinel::Audio>();
 #endif

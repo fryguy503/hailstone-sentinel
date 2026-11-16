@@ -245,6 +245,12 @@ struct Fixture {
     }
     Json state() { return call("state"); }
     Json action(const std::string& op, const std::string& id = "") { return call("action", Json::array({op, id})); }
+    void commandline(const std::string& args) {
+        auto found = commands.find("/sentinel");
+        if (found == commands.end()) found = commands.find("sentinel");
+        check(found != commands.end(), "Sentinel command is registered before invocation");
+        found->second.fn(found->second.user, args.c_str());
+    }
     Json save(const Json& rule) { return call("save", Json::array({rule})); }
     size_t count() { return state().at("alerts").size(); }
     void choose(const std::string& name) {
@@ -430,11 +436,101 @@ void incomplete_rules_cannot_be_enabled() {
     check(!f.action("toggle_alert", "disabled-incomplete").value("ok", true), "enabling revalidates an incomplete saved rule");
     check(!f.state().at("alerts").at(0).at("enabled").get<bool>(), "failed enable preserves disabled state");
 }
+
+void window_visibility_survives_zoning_and_reload() {
+    Fixture f;
+    check(fs::is_empty(f.root), "first-use fixture has no existing settings");
+    f.start();
+    check(f.state().at("open").get<bool>(), "first install opens the Sentinel window");
+    check(f.action("hide").value("ok", false), "closing through the UI succeeds");
+    check(!f.state().at("open").get<bool>(), "UI close hides the window immediately");
+
+    // Exercise the callback-only lifecycle as well as the host's native-plugin reload.
+    OnBeginZone(); f.player.in_zone = 0; SetGameState(GAMESTATE_LOGGINGIN); f.tick();
+    check(!f.state().at("open").get<bool>(), "closed window stays closed while leaving a zone");
+    f.player.zone_id = 3; f.player.in_zone = 1; SetGameState(GAMESTATE_INGAME); OnZoned(); f.tick();
+    check(!f.state().at("open").get<bool>(), "zone callbacks do not reopen a closed window");
+    OnBeginZone(); f.player.in_zone = 0; SetGameState(GAMESTATE_LOGGINGIN); f.tick();
+    f.stop(); f.start();
+    check(!f.state().at("open").get<bool>(), "full shutdown and reinitialization restore a closed window");
+    f.player.zone_id = 4; f.player.in_zone = 1; OnZoned(); f.tick();
+    check(!f.state().at("open").get<bool>(), "reloaded plugin remains closed upon entering the next zone");
+
+    f.commandline("");
+    check(f.state().at("open").get<bool>(), "plain /sentinel opens the window");
+    f.stop(); f.start();
+    check(f.state().at("open").get<bool>(), "plain /sentinel saves the open preference across reloads");
+    f.choose("Bob");
+    check(f.state().at("open").get<bool>(), "changing character retains an open window");
+    f.commandline("hide");
+    check(!f.state().at("open").get<bool>(), "/sentinel hide closes the window");
+    f.stop(); f.start();
+    check(!f.state().at("open").get<bool>(), "command close saves the closed preference across reloads");
+    f.choose("Alice");
+    check(!f.state().at("open").get<bool>(), "returning to another character does not reopen the window");
+
+    check(f.action("show").value("ok", false), "UI show opens the window");
+    f.choose("Bob");
+    check(f.state().at("open").get<bool>(), "UI show remains open across a character transition");
+    check(f.action("hide").value("ok", false), "final UI close succeeds");
+    f.stop(); f.start();
+    check(!f.state().at("open").get<bool>(), "UI close stays saved after earlier open preferences");
+}
+
+void damaged_window_preferences_do_not_reopen_or_change_alerts() {
+    Fixture f; f.start();
+    check(f.save(low_health_rule()).value("ok", false), "window preference fixture has a saved alert");
+    const fs::path alert_path(f.state().at("config_path").get<std::string>());
+    std::string alert_bytes;
+    { std::ifstream in(alert_path, std::ios::binary); alert_bytes.assign(std::istreambuf_iterator<char>(in), {}); }
+    f.stop();
+    const fs::path ui_path = f.root / "global" / "ui-settings.json";
+    const std::string damaged = "{window settings must not cause a popup loop}";
+    { std::ofstream out(ui_path, std::ios::binary | std::ios::trunc); out << damaged; }
+    f.start();
+    check(!f.state().at("open").get<bool>(), "damaged window preferences fall back to a closed window");
+    check(!f.state().value("error", std::string{}).empty(), "damaged window preferences report a useful error");
+    f.stop(); f.start();
+    check(!f.state().at("open").get<bool>(), "damaged preferences do not reopen on repeated reloads");
+    f.commandline("");
+    check(f.state().at("open").get<bool>(), "explicit /sentinel can reopen after damaged preferences");
+    f.stop(); f.start();
+    check(f.state().at("open").get<bool>(), "explicit open repairs and saves the visibility preference");
+    std::ifstream in(alert_path, std::ios::binary);
+    const std::string remaining((std::istreambuf_iterator<char>(in)), {});
+    check(remaining == alert_bytes, "repairing window preferences leaves character alerts byte-for-byte intact");
+}
+
+void unwritable_first_use_does_not_create_a_popup_loop() {
+    Fixture f;
+    const fs::path blocker = f.root / "blocked-global";
+    { std::ofstream out(blocker, std::ios::binary); out << "Keep this regular file"; }
+    f.api.config_dir = [](void* h, char* out, size_t cap) {
+        auto& fixture = Fixture::of(h); fixture.same_thread();
+        // This directory cannot be created because an ancestor is a regular file.
+        return copy_text((fixture.root / "blocked-global" / "sentinel").string(), out, cap);
+    };
+    f.start();
+    check(!f.state().at("open").get<bool>(), "failed first-use preference write defaults to a closed window");
+    check(!f.state().value("error", std::string{}).empty(), "unwritable preferences expose an error");
+    f.stop(); f.start();
+    check(!f.state().at("open").get<bool>(), "unwritable first-use preferences do not repeat an automatic popup");
+    const auto shown = f.action("show");
+    check(!shown.value("ok", true), "manual open reports failure to save its preference");
+    check(f.state().at("open").get<bool>(), "manual open is honored immediately despite a failed preference write");
+    const auto hidden = f.action("hide");
+    check(!hidden.value("ok", true) && !f.state().at("open").get<bool>(), "manual close is honored despite a failed preference write");
+    f.stop(); f.start();
+    check(!f.state().at("open").get<bool>(), "failed manual preference writes still cannot cause startup popup loops");
+    std::ifstream in(blocker, std::ios::binary);
+    const std::string remaining((std::istreambuf_iterator<char>(in)), {});
+    check(remaining == "Keep this regular file", "failed preference writes leave an existing blocking file intact");
+}
 } // namespace
 
 int main() {
     try {
-        actions_and_persistence(); sharing_and_validation(); evaluation_and_lifecycle(); snapshot_adapter(); damaged_settings_are_preserved(); incomplete_rules_cannot_be_enabled();
+        actions_and_persistence(); sharing_and_validation(); evaluation_and_lifecycle(); snapshot_adapter(); damaged_settings_are_preserved(); incomplete_rules_cannot_be_enabled(); window_visibility_survives_zoning_and_reload(); damaged_window_preferences_do_not_reopen_or_change_alerts(); unwritable_first_use_does_not_create_a_popup_loop();
         std::cout << "Plugin integration checks passed: " << checks << '\n';
         return 0;
     } catch (const std::exception& e) {
