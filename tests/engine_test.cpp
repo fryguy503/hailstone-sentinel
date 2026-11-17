@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "engine.h"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -84,14 +85,14 @@ void entities() {
 void buffs_spawns_casts() {
     auto a = rule("buff_fading"); a["subject"] = "Protection"; a["threshold"] = 30;
     auto e = engine(a); auto s = snapshot();
-    s.buffs.push_back({1, "protection", std::nullopt, false});
+    s.buffs.push_back({1, "protection", std::nullopt, false, std::nullopt});
     check(e.evaluate(s, 0).empty(), "Unknown buff timer is quiet");
     s.buffs[0].seconds = 30; check(e.evaluate(s, 100).size() == 1, "Known buff fade threshold fires");
     s.buffs.clear(); check(e.evaluate(s, 200).empty(), "Missing buff is not a fading buff");
     a = rule("buff_missing"); a["subject"] = "Protection"; e = engine(a);
     check(e.evaluate(s, 300).size() == 1, "Required missing buff fires");
     check(e.evaluate(s, 400).empty(), "Missing buff is latched");
-    s.buffs.push_back({1, "Protection", 200, false}); e.evaluate(s, 500);
+    s.buffs.push_back({1, "Protection", 200, false, std::nullopt}); e.evaluate(s, 500);
     s.buffs.clear(); check(e.evaluate(s, 600).size() == 1, "Buff returning rearms missing warning");
     sentinel::Entity npc; npc.id = 1; npc.npc = true; npc.name = "Named NPC"; npc.distance = 200;
     s.entities = {npc}; a = rule("spawn_appears"); a["subject"] = "Named NPC"; a["threshold"] = 250; e = engine(a);
@@ -134,6 +135,142 @@ void chat_patterns() {
     check(e.chat(s, std::string(2048, 'a'), 0, 100).empty(), "Pathological pattern is bounded");
     check(e.chat(s, std::string(3000, 'a'), 0, 110).empty(), "Oversized chat ignored");
 }
+sentinel::Buff effect(uint32_t id, const char* name, std::optional<bool> beneficial) {
+    return {id, name, 120, false, beneficial};
+}
+void buff_arrivals() {
+    auto e = engine(rule("buff_received", "buff"));
+    e.config["alerts"].push_back(rule("debuff_received", "debuff"));
+    auto s = snapshot();
+    s.buffs = {effect(1, "Protection", true), effect(2, "Poison", false), effect(3, "Unknown", std::nullopt)};
+    check(e.chat(s, "A chat line before the first state poll", 0, 0).empty(), "Chat may prepare a zone before the first buff baseline");
+    check(e.evaluate(s, 0).empty(), "Existing beneficial, detrimental and unknown effects are quiet on login");
+    s.buffs.push_back(effect(4, "Group Ward", true));
+    s.buffs.push_back(effect(5, "Disease", false));
+    s.buffs.push_back(effect(6, "Unclassified", std::nullopt));
+    auto out = e.evaluate(s, 100);
+    check(out.size() == 2, "Beneficial and detrimental arrivals each notify their own rule");
+    check(out[0].id == "buff" && out[0].message == "You received a buff: Group Ward.", "Beneficial group effects use the beneficial arrival event");
+    check(out[1].id == "debuff" && out[1].message == "You received a debuff: Disease.", "A known false classification is detrimental, not unknown");
+    s.buffs[0].seconds = 600;
+    std::reverse(s.buffs.begin(), s.buffs.end());
+    s.buffs.push_back(effect(4, "Group Ward", true));
+    check(e.evaluate(s, 200).empty(), "Duration refreshes, slot movement and duplicate spell IDs stay quiet");
+    for (auto& b : s.buffs) if (b.id == 6) b.beneficial = true;
+    check(e.evaluate(s, 300).empty(), "Learning the classification of an existing effect is not an arrival");
+    std::erase_if(s.buffs, [](const auto& b) { return b.id == 4; });
+    check(e.evaluate(s, 400).empty(), "An effect leaving is quiet");
+    s.buffs.push_back(effect(4, "Group Ward", true));
+    out = e.evaluate(s, 500);
+    check(out.size() == 1 && out[0].message.find("Group Ward") != std::string::npos, "Reapplication after an observed absence alerts again");
+    s.buffs.push_back(effect(7, "New Ward", std::nullopt));
+    s.buffs.push_back(effect(7, "New Ward", true));
+    s.buffs.push_back(effect(7, "New Ward", true));
+    s.buffs.push_back(effect(0, "Empty slot", true));
+    out = e.evaluate(s, 600);
+    check(out.size() == 1 && out[0].message == "You received a buff: New Ward.", "Duplicate IDs merge known metadata once and zero IDs are ignored");
+    s.buffs.push_back(effect(8, "Ambiguous", true));
+    s.buffs.push_back(effect(8, "Ambiguous", false));
+    check(e.evaluate(s, 700).empty(), "Conflicting metadata for one spell is not classified");
+    std::erase_if(s.buffs, [](const auto& b) { return b.id == 8 && b.beneficial == false; });
+    check(e.evaluate(s, 800).empty(), "Resolving existing ambiguous metadata is not an arrival");
+    s.buffs.push_back(effect(9, "Haste", true));
+    s.buffs.push_back(effect(10, "Shield", true));
+    out = e.evaluate(s, 900);
+    check(out.size() == 1 && out[0].message == "You received buffs: Haste, Shield.", "Simultaneous beneficial arrivals produce one summary naming every effect");
+    s.buffs.push_back(effect(11, "Slow", false));
+    s.buffs.push_back(effect(12, "Curse", false));
+    out = e.evaluate(s, 1000);
+    check(out.size() == 1 && out[0].message == "You received debuffs: Slow, Curse.", "Simultaneous detrimental arrivals produce one named summary");
+    auto a = rule("buff_received"); a["subject"] = "PROTECTION";
+    e = engine(a); s.buffs.clear(); e.evaluate(s, 1100);
+    s.buffs = {effect(20, "Greater Protection", true)};
+    check(e.evaluate(s, 1200).empty(), "Optional spell-name filters match exactly, not by substring");
+    s.buffs.push_back(effect(21, "protection", true));
+    out = e.evaluate(s, 1300);
+    check(out.size() == 1 && out[0].message == "You received a buff: protection.", "Exact spell-name filters ignore ASCII case");
+    e.config["alerts"][0]["subject"] = "Protection*";
+    check(e.evaluate(s, 1400).empty(), "Editing the filter establishes a quiet baseline");
+    s.buffs.push_back(effect(22, "Protection of the Wild", true));
+    check(e.evaluate(s, 1500).empty(), "Buff arrival subjects do not interpret wildcard syntax");
+}
+void buff_arrival_lifecycle() {
+    auto a = rule("buff_received");
+    auto e = engine(a); auto s = snapshot();
+    check(e.evaluate(s, 0).empty(), "An empty initial effect list establishes a quiet baseline");
+    s.buffs.push_back(effect(1, "Protection", true));
+    check(e.evaluate(s, 100).size() == 1, "A new effect after an empty baseline alerts");
+    s.zone_id = 11;
+    e.chat(s, "Chat arrives before the new zone's state poll", 0, 200);
+    check(e.evaluate(s, 200).empty(), "A zone change establishes a quiet per-rule baseline even after chat prepares state");
+    s.character = "Another";
+    check(e.evaluate(s, 300).empty(), "A character change establishes a quiet baseline");
+    e.config["enabled"] = false; e.evaluate(s, 400);
+    e.config["enabled"] = true;
+    check(e.evaluate(s, 500).empty(), "Master resume does not report existing effects as new");
+    e.config["alerts"][0]["enabled"] = false; e.evaluate(s, 600);
+    e.config["alerts"][0]["enabled"] = true;
+    check(e.evaluate(s, 700).empty(), "A re-enabled rule starts with a quiet baseline");
+    e.config["alerts"][0]["message"] = "Edited: {L}";
+    check(e.evaluate(s, 800).empty(), "Editing a rule starts with a quiet baseline");
+    e.config["alerts"].push_back(rule("buff_received", "new-rule"));
+    check(e.evaluate(s, 900).empty(), "A newly added rule does not report effects already present");
+    s.buffs.push_back(effect(2, "Haste", true));
+    auto out = e.evaluate(s, 1000);
+    check(out.size() == 2 && out[0].message == "Edited: You received a buff: Haste.", "New arrivals still use the standard template pipeline after rebasing");
+    s.in_zone = false; e.evaluate(s, 1100); s.in_zone = true;
+    check(e.evaluate(s, 1200).empty(), "Returning from a zoning state starts quietly");
+    s.alive = false; e.evaluate(s, 1300); s.alive = true;
+    check(e.evaluate(s, 1400).empty(), "Returning to a live state starts quietly");
+    a = rule("buff_received"); a["zone_id"] = 12; e = engine(a);
+    check(e.evaluate(s, 1500).empty(), "A zone-scoped arrival rule ignores other zones");
+    s.zone_id = 12;
+    check(e.evaluate(s, 1600).empty(), "Entering the watched zone does not announce pre-existing effects");
+}
+void buff_arrival_incomplete_and_cooldown() {
+    auto e = engine(rule("buff_received")); auto s = snapshot();
+    s.buffs_complete = false;
+    check(e.evaluate(s, 0).empty(), "An incomplete first list does not establish an empty baseline");
+    s.buffs = {effect(1, "Protection", true)};
+    check(e.evaluate(s, 100).empty(), "Partial effect lists cannot trigger arrivals");
+    s.buffs_complete = true;
+    check(e.evaluate(s, 200).empty(), "The first complete list remains a quiet baseline");
+    s.buffs_complete = false; s.buffs.clear();
+    check(e.evaluate(s, 300).empty(), "A failed read does not clear the arrival baseline");
+    s.buffs_complete = true; s.buffs = {effect(1, "Protection", true)};
+    check(e.evaluate(s, 400).empty(), "An effect returning after only an incomplete gap is not new");
+    s.buffs_complete = false; s.buffs.push_back(effect(2, "Haste", true));
+    check(e.evaluate(s, 500).empty(), "New IDs in a partial list are ignored until a complete read");
+    s.buffs_complete = true;
+    auto out = e.evaluate(s, 600);
+    check(out.size() == 1 && out[0].message.find("Haste") != std::string::npos, "A partial read does not mask a later trustworthy arrival");
+    auto a = rule("buff_missing"); a["subject"] = "Protection";
+    e = engine(a); e.evaluate(s, 700);
+    s.buffs_complete = false; s.buffs.clear();
+    check(e.evaluate(s, 800).empty(), "Incomplete reads do not produce missing-buff warnings");
+    s.buffs_complete = true; s.buffs = {effect(1, "Protection", true)};
+    check(e.evaluate(s, 900).empty(), "A valid present buff remains present after an incomplete read");
+    s.buffs.clear(); check(e.evaluate(s, 1000).size() == 1, "A trustworthy missing buff still alerts");
+    s.buffs_complete = false; s.buffs = {effect(1, "Protection", true)}; e.evaluate(s, 1100);
+    s.buffs_complete = true; s.buffs.clear();
+    check(e.evaluate(s, 1200).empty(), "Partial presence cannot rearm an already missing buff");
+    a = rule("buff_fading"); a["subject"] = "Protection"; e = engine(a);
+    s.buffs = {effect(1, "Protection", true)}; s.buffs[0].seconds = 10;
+    check(e.evaluate(s, 1300).size() == 1, "A known fading buff alerts normally");
+    s.buffs_complete = false; s.buffs.clear(); e.evaluate(s, 1400);
+    s.buffs_complete = true; s.buffs = {effect(1, "Protection", true)}; s.buffs[0].seconds = 10;
+    check(e.evaluate(s, 1500).empty(), "Incomplete reads preserve the fading-buff latch");
+    a = rule("buff_received"); a["cooldown"] = 10; a["message"] = "{C}: {L} ({COUNTER})"; a["speech_text"] = "{L}";
+    e = engine(a); s.buffs.clear(); e.evaluate(s, 0);
+    s.buffs.push_back(effect(10, "Protection", true)); out = e.evaluate(s, 100);
+    check(out.size() == 1 && out[0].message == "Adventurer: You received a buff: Protection. (1)", "Arrival messages support character, detail and counter tokens");
+    check(out[0].speech == "You received a buff: Protection.", "Arrival speech uses the same named detail independently");
+    s.buffs.push_back(effect(11, "Haste", true));
+    check(e.evaluate(s, 200).empty(), "Cooldown suppresses later arrivals");
+    check(e.evaluate(s, 10200).empty(), "Suppressed arrivals never replay when cooldown expires");
+    s.buffs.push_back(effect(12, "Shield", true)); out = e.evaluate(s, 10300);
+    check(out.size() == 1 && out[0].message == "Adventurer: You received a buff: Shield. (2)", "A later fresh arrival fires without stale suppressed names or counters");
+}
 void host_chat_formats() {
     auto s = snapshot();
     auto a = rule("incoming_tell"); auto e = engine(a);
@@ -164,8 +301,13 @@ void host_chat_formats() {
     check(e.chat(s, "Friend says, 'Your target resisted the Fire spell.'", 0, 2300).empty(), "Quoted resist message excluded");
 }
 void config_and_sharing() {
-    check(sentinel::events().size() == 23, "All original event types catalogued");
-    check(sentinel::presets().size() >= 30, "Preset library supplied");
+    check(sentinel::events().size() == 25, "Original and buff/debuff arrival event types catalogued");
+    check(sentinel::presets().size() >= 32, "Preset library includes buff/debuff arrivals");
+    for (const auto* event : {"buff_received", "debuff_received"}) {
+        const auto a = sentinel::normalize_alert({{"event", event}});
+        check(a["threshold"] == 0 && a["subject"] == "", "Arrival rules need neither a threshold nor a spell-name filter");
+        check(sentinel::parse_import(sentinel::export_alerts(sentinel::Json::array({a}))).size() == 1, "Arrival rules share and import with an optional subject");
+    }
     auto a = rule("health_below"); a["volume"] = 1000; a["duration"] = -1; a["sound_file"] = "../private.wav";
     a = sentinel::normalize_alert(a);
     check(a["volume"] == 100 && a["duration"] == .5 && a["sound_file"] == "", "Normalize bounds and sound paths");
@@ -191,7 +333,8 @@ void config_and_sharing() {
 } // namespace
 int main() {
     try {
-        thresholds(); cooldown_and_preview(); entities(); buffs_spawns_casts(); chat_patterns(); host_chat_formats(); config_and_sharing();
+        thresholds(); cooldown_and_preview(); entities(); buffs_spawns_casts(); chat_patterns(); host_chat_formats();
+        buff_arrivals(); buff_arrival_lifecycle(); buff_arrival_incomplete_and_cooldown(); config_and_sharing();
         std::cout << "Sentinel engine: " << checks << " checks passed\n";
         return 0;
     } catch (const std::exception& e) {

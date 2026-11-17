@@ -24,6 +24,8 @@ constexpr EventDef definitions[] = {
     {"group_health_below", "A group member's health is low", "Party", "Player name (optional)", "Health (%)", "Watch other group members, or enter one exact name. Each member rearms independently."},
     {"buff_fading", "A buff is about to fade", "Buffs", "Exact buff name", "Seconds remaining", "Warn when a known, timed buff reaches this many seconds remaining."},
     {"buff_missing", "A required buff is missing", "Buffs", "Exact buff name", "", "Warn once while the buff is missing; it rearms when the buff returns."},
+    {"buff_received", "I receive a buff", "Buffs", "Exact spell name (optional)", "", "Watch newly gained beneficial effects. Leave the name empty for any buff. Existing effects on login, zoning or enabling this rule, and timer refreshes, stay quiet."},
+    {"debuff_received", "I receive a debuff", "Buffs", "Exact spell name (optional)", "", "Watch newly gained harmful effects. Leave the name empty for any debuff. Existing effects on login, zoning or enabling this rule, and timer refreshes, stay quiet."},
     {"spawn_appears", "An NPC appears nearby", "Awareness", "Exact NPC name", "Range (units)", "Watch an exact NPC name within this distance. Corpses are excluded."},
     {"player_appears", "A player appears nearby", "Awareness", "Exact player name", "Range (units)", "Watch an exact player name within this distance."},
     {"target_cast", "My target begins casting", "Combat", "Exact spell name (optional)", "", "Detect a new observed cast on your target; leave the spell name empty for any spell."},
@@ -119,6 +121,7 @@ const EventDef* find_event(const std::string& id) {
     return nullptr;
 }
 bool percentage(const std::string& e) { return e.size() >= 6 && e.compare(e.size() - 6, 6, "_below") == 0; }
+bool buff_arrival(const std::string& e) { return e == "buff_received" || e == "debuff_received"; }
 bool requires_subject(const std::string& e) {
     return e == "player_health_below" || e == "player_mana_below" || e == "buff_fading" ||
         e == "buff_missing" || e == "spawn_appears" || e == "player_appears" || e == "chat_text_match";
@@ -274,7 +277,7 @@ Json normalize_alert(const Json& input) {
     if (!find_event(e)) throw std::invalid_argument("Unknown alert event: " + e);
     const double maximum = percentage(e) ? 100 : e == "buff_fading" ? 36000 : 10000;
     const double minimum = percentage(e) || e == "buff_fading" || e == "spawn_appears" || e == "player_appears" ? 1 : 0;
-    const double threshold = num(input, "threshold", percentage(e) ? 30 : e == "buff_fading" ? 60 : 250, minimum, maximum);
+    const double threshold = num(input, "threshold", percentage(e) ? 30 : e == "buff_fading" ? 60 : buff_arrival(e) ? 0 : 250, minimum, maximum);
     std::string color = str(input, "color", "cyan", 16), tone = str(input, "tone", "chime", 16);
     if (std::set<std::string>{"red", "orange", "yellow", "green", "cyan", "blue", "purple", "white"}.count(color) == 0) color = "cyan";
     if (std::set<std::string>{"chime", "alert", "critical", "question", "default"}.count(tone) == 0) tone = "chime";
@@ -398,6 +401,8 @@ Json presets() {
     add("buff-soon", "Buff fading soon", "buff_fading", 120, "yellow", "BUFF FADING", "Enter a buff's exact name for a two-minute warning.", "", "question", 30);
     add("buff-refresh", "Refresh a buff", "buff_fading", 30, "orange", "REFRESH BUFF", "Enter a buff's exact name for a 30-second warning.", "", "alert", 15);
     add("buff-missing", "Required buff missing", "buff_missing", 0, "purple", "BUFF MISSING", "Enter a buff that should always be active.", "", "question", 30);
+    add("buff-received", "Buff received", "buff_received", 0, "cyan", "", "See the names of newly received beneficial effects. Existing effects and refreshes stay quiet.", "", "chime", 3);
+    add("debuff-received", "Debuff received", "debuff_received", 0, "red", "", "Notice newly received detrimental effects by name. Existing effects and refreshes stay quiet.", "", "alert", 5);
     add("named-npc", "Named NPC nearby", "spawn_appears", 250, "yellow", "NAMED NPC NEARBY", "Enter an exact NPC name to watch within 250 units.", "", "alert", 30);
     add("nearby-player", "Player nearby", "player_appears", 250, "cyan", "PLAYER NEARBY", "Enter a player's exact name to watch within 250 units.", "", "chime", 30);
     add("interrupt", "Interrupt a spell", "target_cast", 0, "red", "INTERRUPT CAST", "Enter an exact spell name, or leave it empty for any cast.", "", "critical", 3);
@@ -473,6 +478,9 @@ std::vector<Fired> Engine::evaluate(const Snapshot& s, uint64_t now) {
         retained.insert(id);
         if (!a["enabled"].get<bool>() || (a["zone_id"].get<uint32_t>() && a["zone_id"] != s.zone_id)) { state_.erase(id); continue; }
         auto& r = state(a);
+        // An unavailable/partial read is not evidence of an effect arriving or
+        // disappearing. Preserve both arrival baselines and existing buff latches.
+        if (!s.buffs_complete && (buff_arrival(e) || e == "buff_fading" || e == "buff_missing")) continue;
         const double threshold = a["threshold"];
         bool edge = false;
         std::string detail;
@@ -494,6 +502,40 @@ std::vector<Fired> Engine::evaluate(const Snapshot& s, uint64_t now) {
         else if (e == "pet_lost") {
             if (r.pet_initialized && r.pet_id && !s.pet_id) { edge = true; detail = "Your pet disappeared or charm broke."; }
             r.pet_initialized = true; r.pet_id = s.pet_id;
+        } else if (buff_arrival(e)) {
+            std::map<uint32_t, const Buff*> current;
+            std::set<uint32_t> conflicts;
+            for (const auto& b : s.buffs) {
+                if (!b.id) continue;
+                auto [it, inserted] = current.emplace(b.id, &b);
+                if (!inserted) {
+                    if (it->second->beneficial && b.beneficial && *it->second->beneficial != *b.beneficial)
+                        conflicts.insert(b.id);
+                    else if (!it->second->beneficial && b.beneficial) it->second = &b;
+                }
+            }
+            std::set<uint32_t> ids;
+            std::vector<std::string> names;
+            for (const auto& [spell_id, b] : current) {
+                // Track unknown classifications too: learning metadata about an
+                // existing spell must never look like receiving a new effect.
+                ids.insert(spell_id);
+                if (!r.buffs_initialized || r.buff_ids.count(spell_id) || conflicts.count(spell_id) ||
+                    !b->beneficial || *b->beneficial != (e == "buff_received") ||
+                    (!subject.empty() && !equal(subject, b->name))) continue;
+                const std::string name = b->name.empty() ? "spell #" + std::to_string(spell_id) : b->name;
+                if (std::none_of(names.begin(), names.end(), [&](const auto& old) { return equal(old, name); }))
+                    names.push_back(name);
+            }
+            r.buffs_initialized = true;
+            r.buff_ids = std::move(ids);
+            if (!names.empty()) {
+                edge = true;
+                const std::string kind = e == "buff_received" ? "buff" : "debuff";
+                detail = "You received " + (names.size() == 1 ? "a " + kind : kind + "s") + ": ";
+                for (size_t i = 0; i < names.size(); ++i) detail += (i ? ", " : "") + names[i];
+                detail += ".";
+            }
         } else if (e == "buff_fading" || e == "buff_missing") {
             const Buff* buff = nullptr;
             for (const auto& b : s.buffs) if (equal(b.name, subject)) { buff = &b; break; }

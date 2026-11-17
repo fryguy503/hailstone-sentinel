@@ -22,7 +22,7 @@ Packages are available for **Windows x64**, **Linux x64**, and **macOS Apple Sil
 
 ## Make it yours
 
-- **23 event types.** Health, mana, endurance, party and pet warnings, buffs, nearby spawns, target casts, chat channels, custom text patterns, fizzles, resists, and invisibility warnings.
+- **25 event types.** Health, mana, endurance, party and pet warnings, received buffs and debuffs, fading or missing buffs, nearby spawns, target casts, chat channels, custom text patterns, fizzles, resists, and invisibility warnings.
 - **A guided rule builder.** Choose a trigger, pick notification styles, and read a plain-language summary before saving.
 - **A familiar, compact window.** Follows your active client theme and palette. Starter kits use a searchable list with details for the selected preset.
 - **A searchable library.** Organize up to 128 alerts with categories, sections, subsections, and optional zone restrictions.
@@ -42,12 +42,16 @@ Sentinel only observes and notifies. It does not cast, target, move, send chat t
 | My health reaches 15% | Emergency heal |
 | A group member reaches 35% health | Group emergency |
 | My buff has 30 seconds left | Refresh a buff |
+| I gain a beneficial effect | Buff received |
+| A harmful effect lands on me | Debuff received |
 | My pet disappears or charm breaks | Pet lost or charm broke |
 | My target begins casting | Interrupt a spell |
 | Someone sends me a tell | Never miss a tell |
 | A chat line reports a large hit | Custom text pattern |
 
 Percentage rules alert once when the threshold is reached. They rearm after recovery above the threshold plus three percentage points. A cooldown limits notifications; it does not repeat an alert while a condition remains true. Group members and targets are tracked independently. Logging in without a pet does not trigger a lost-pet warning.
+
+For **I receive a buff** and **I receive a debuff**, leave **Exact spell name** empty to watch all effects of that kind, or enter one full spell name (ignoring letter case). The automatic message names the new effects; use `{L}` to include that description in custom messages or speech. Effects already present when you log in, zone, or enable a rule establish its starting state. Refreshing a timer or moving an effect between slots stays quiet. An effect can alert again after Sentinel observes it disappear and return. These events watch effects in your own buff/song slots; instant spells with no lasting effect are not included.
 
 ## Text patterns and messages
 
@@ -93,7 +97,7 @@ python tools/convert_legacy.py path/to/CitadelCharacter.ini --out sentinel-impor
 
 The addon has automated rule, SDK adapter, persistence, import, audio-data, speech-process, and UI checks, plus rendered UI verification. CI builds and tests native Windows x64, Linux x64, and macOS arm64 packages. **Live gameplay and audible output acceptance on actual Linux and Mac systems are still needed.**
 
-Sentinel uses information the server supplies. Other players' mana may be unavailable; absent readings are ignored. Group checks cover members present in your zone. Target casts are sampled every 100 ms, so a very short cast may be missed. Channel alerts recognize the standard English chat envelopes because Hailstone 0.7 passes RGB rather than channel metadata to native chat callbacks. Custom patterns can be used for localized text.
+Sentinel uses information the server supplies. Other players' mana may be unavailable; absent readings are ignored. Group checks cover members present in your zone. Target casts and buff arrivals are sampled every 100 ms, so changes entirely between samples may be missed. Unknown spell types and incomplete buff readings are ignored. Channel alerts recognize the standard English chat envelopes because Hailstone 0.7 passes RGB rather than channel metadata to native chat callbacks. Custom patterns can be used for localized text.
 
 The DLL's binary raid-sharing packets and INI files are not read automatically. The migration tool creates a portable import and leaves the source untouched. Settings that cannot be read are preserved and reported instead of overwritten.
 

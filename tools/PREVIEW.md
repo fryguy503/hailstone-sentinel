@@ -36,7 +36,7 @@ On Windows the executable may be in `build-preview/Release/`; Lua's runtime DLL
 must be on `PATH`. Windows previews use the installed Segoe UI font; other systems
 use Dear ImGui's built-in font. The client chooses its own fonts.
 
-The renderer uses the core's actual 23-event catalog and 30 starter presets. To
+The renderer uses the core's actual 25-event catalog and 32 starter presets. To
 preview the active pack's real theme, point `HAILSTONE_UI_DIR` at an existing
 Hailstone `ui/modern` or `ui/gamepad` directory. `HAILSTONE_PALETTE` selects a palette
 (for example `midnight` or `daylight`). `tools/preview_theme.lua` routes nested

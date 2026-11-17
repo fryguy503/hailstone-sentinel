@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-preview.5
+
+- Add **I receive a buff** and **I receive a debuff** events, with an optional exact spell-name filter and starter presets.
+- Include new effect names in automatic messages and `{L}` templates; summarize multiple arrivals in one notification per rule.
+- Keep existing effects quiet on login, zoning, enabling or editing a rule, and timer refreshes. Reapplication alerts after an observed absence; cooldown-suppressed arrivals are not replayed.
+- Ignore unknown spell types and incomplete buff reads. Use stable SDK slot reads across client revisions.
+- Keep native Windows x64, Linux x64, and macOS Apple Silicon packages.
+
 ## 1.0.0-preview.4
 
 - Add native Linux x64 and macOS Apple Silicon addon packages alongside Windows x64.

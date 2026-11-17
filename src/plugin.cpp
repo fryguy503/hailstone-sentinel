@@ -36,6 +36,7 @@ std::string status="Choose a starter preset or create your first alert.", error;
 std::string window_error;
 Json history=Json::array(), overlays=Json::array();
 std::vector<std::string> sounds;
+std::map<uint32_t,bool> buff_types;
 #ifdef SENTINEL_TESTING
 uint64_t test_now=1000;
 #endif
@@ -176,7 +177,7 @@ template<typename Fn> Json change(Fn fn) {
     try{fn();if(!persist()){engine.config=previous;return failure(error);}return success();}
     catch(const std::exception& ex){engine.config=previous;return failure(ex.what());}
 }
-void cancel_activity() {engine.reset();overlays.clear();if(audio)audio->cancel();}
+void cancel_activity() {engine.reset();buff_types.clear();overlays.clear();if(audio)audio->cancel();}
 void load_for(const fs::path& next) {
     cancel_activity();history.clear();folder=next;load_failed=false;error.clear();
     engine.config=defaults();presentation_defaults(engine.config);
@@ -204,6 +205,7 @@ void refresh_snapshot() {
     }
     next.in_zone=true;next.alive=player.cur_hp>0&&player.stand_state!=120;
     next.zone_id=player.zone_id;next.character=player.name;next.target_id=player.target_id;next.pet_id=player.pet_id;
+    if(next.zone_id!=snapshot.zone_id||next.character!=snapshot.character)buff_types.clear();
     next.hp=percent(static_cast<double>(player.cur_hp),static_cast<double>(player.max_hp));
     next.mana=percent(player.cur_mana,player.max_mana);next.endurance=percent(player.cur_endurance,player.max_endurance);
     const auto& alerts=engine.config["alerts"];
@@ -252,12 +254,31 @@ void refresh_snapshot() {
                 durations[static_cast<uint32_t>(*spell)]=number(parse(base+"Duration.TotalSeconds}"));
         }
     }
+    const bool need_buff_types=std::any_of(alerts.begin(),alerts.end(),[](const auto& a){
+        const auto event=a.value("event",std::string{});
+        return a.value("enabled",false)&&(event=="buff_received"||event=="debuff_received");});
+    // get_buff succeeds for empty slots too. A failed read must not make an
+    // existing effect appear removed, then newly received on the next poll.
+    next.buffs_complete=host->get_buff&&player.buff_slots>0&&player.buff_slots<=512;
     if(host->get_buff)for(uint32_t i=0;i<std::min(player.buff_slots,512u);++i) {
         HailstoneBuff b{};b.size=sizeof b;
-        if(!host->get_buff(host->host,i,&b)||!b.spell_id)continue;
+        if(!host->get_buff(host->host,i,&b)){next.buffs_complete=false;continue;}
+        if(!b.spell_id)continue;
         Buff buff;buff.id=b.spell_id;
         HailstoneSpell spell{};spell.size=sizeof spell;
-        if(host->get_spell&&host->get_spell(host->host,b.spell_id,&spell))buff.name=spell.name;
+        const bool known=host->get_spell&&host->get_spell(host->host,b.spell_id,&spell)&&spell.id==b.spell_id;
+        if(known)buff.name=spell.name;
+        if(need_buff_types&&known) {
+            if(const auto it=buff_types.find(b.spell_id);it!=buff_types.end())buff.beneficial=it->second;
+            else {
+                // Numeric lookup is stable across client SDK revisions. The bulk
+                // buff record layout changed within ABI 3; don't infer its layout.
+                const auto type=parse("${Spell["+std::to_string(b.spell_id)+"].SpellType}");
+                if(type=="Beneficial")buff.beneficial=true;
+                else if(type=="Detrimental")buff.beneficial=false;
+                if(buff.beneficial.has_value())buff_types.emplace(b.spell_id,*buff.beneficial);
+            }
+        }
         // The TLO subtracts elapsed time; raw buff tics are only the last server snapshot.
         if(const auto it=durations.find(b.spell_id);it!=durations.end())buff.seconds=it->second;
         next.buffs.push_back(std::move(buff));

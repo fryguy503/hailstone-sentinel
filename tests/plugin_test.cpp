@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -91,6 +92,7 @@ struct Fixture {
     std::map<std::string, Command> commands;
     std::map<uint32_t, HailstoneSpawn> spawns;
     std::map<uint32_t, HailstoneBuff> buffs;
+    std::set<uint32_t> failed_buff_slots;
     std::map<uint32_t, HailstoneSpell> spells;
     std::map<std::string, std::string> parsed;
     std::vector<std::string> chat, errors;
@@ -190,9 +192,13 @@ struct Fixture {
             return f.api.get_spawn(h, found->first, out);
         };
         api.get_buff = [](void* h, uint32_t index, HailstoneBuff* out) {
-            auto& f = of(h); f.same_thread(); const auto found = f.buffs.find(index);
-            if (found == f.buffs.end()) return 0;
-            *out = found->second; return 1;
+            auto& f = of(h); f.same_thread();
+            if (index >= f.player.buff_slots || f.failed_buff_slots.count(index)) return 0;
+            const auto found = f.buffs.find(index);
+            *out = {}; out->size = sizeof(*out);
+            if (found != f.buffs.end()) *out = found->second;
+            // A readable empty slot succeeds with spell_id zero, as the real SDK does.
+            return 1;
         };
         api.get_spell = [](void* h, uint32_t id, HailstoneSpell* out) {
             auto& f = of(h); f.same_thread(); const auto found = f.spells.find(id);
@@ -526,11 +532,106 @@ void unwritable_first_use_does_not_create_a_popup_loop() {
     const std::string remaining((std::istreambuf_iterator<char>(in)), {});
     check(remaining == "Keep this regular file", "failed preference writes leave an existing blocking file intact");
 }
+
+void put_known_buff(Fixture& f,uint32_t slot,uint32_t id,const char* name,const char* spell_type) {
+    f.player.buff_slots=std::max(f.player.buff_slots,slot+1);
+    HailstoneBuff buff{};buff.size=sizeof(buff);buff.spell_id=id;buff.tics=10;f.buffs[slot]=buff;
+    HailstoneSpell spell{};spell.size=sizeof(spell);spell.id=id;copy_text(name,spell.name,sizeof(spell.name));f.spells[id]=spell;
+    f.parsed["${Spell["+std::to_string(id)+"].SpellType}"]=spell_type;
+}
+size_t chat_count(const Fixture& f,const std::string& text) {
+    return static_cast<size_t>(std::count_if(f.chat.begin(),f.chat.end(),[&](const auto& line){return line.find(text)!=std::string::npos;}));
+}
+Json received_rule(const char* event,const char* message,const char* subject="") {
+    auto rule=low_health_rule();rule["event"]=event;rule["message"]=message;rule["subject"]=subject;return rule;
+}
+
+void received_effects_use_known_spell_types() {
+    Fixture f;f.player.buff_slots=8;
+    put_known_buff(f,0,200,"Clarity","Beneficial");put_known_buff(f,1,201,"Sluggishness","Detrimental");f.start();
+    check(f.save(received_rule("buff_received","BENEFICIAL_RECEIVED {L}")).value("ok",false),"beneficial-arrival rule saves with an optional empty name");
+    check(f.save(received_rule("debuff_received","DETRIMENTAL_RECEIVED {L}")).value("ok",false),"detrimental-arrival rule saves with an optional empty name");
+    check(f.save(received_rule("buff_received","FILTERED_GROUP_EFFECT","gRoUp AeGiS")).value("ok",false),"arrival rule accepts an exact name filter");
+    f.chat.clear();f.tick();check(f.chat.empty(),"already active beneficial and detrimental effects establish a quiet baseline");
+    put_known_buff(f,2,202,"Haste","Beneficial");put_known_buff(f,3,203,"Toxin","Detrimental");f.tick();
+    check(chat_count(f,"BENEFICIAL_RECEIVED")==1&&chat_count(f,"DETRIMENTAL_RECEIVED")==1,"new beneficial and detrimental effects each choose their matching event");
+    check(chat_count(f,"Haste")==1&&chat_count(f,"Toxin")==1,"arrival details identify the received spell");
+    check(chat_count(f,"FILTERED_GROUP_EFFECT")==0,"unrelated buff names do not match a filtered arrival");
+    const auto count=f.chat.size();f.buffs[2].tics=100;f.buffs[3].tics=100;f.tick();
+    check(f.chat.size()==count,"refreshing existing spell IDs does not create another arrival");
+    // The public SpellType TLO represents ordinary type1 and group-only type2 as Beneficial.
+    put_known_buff(f,4,204,"Group Aegis","Beneficial");f.tick();
+    check(chat_count(f,"FILTERED_GROUP_EFFECT")==1,"beneficial group effect matches its exact name without case sensitivity");
+    check(chat_count(f,"DETRIMENTAL_RECEIVED")==1,"group-only beneficial representation does not become a detrimental event");
+    f.buffs.erase(2);f.tick();put_known_buff(f,2,202,"Haste","Beneficial");f.tick();
+    check(chat_count(f,"BENEFICIAL_RECEIVED")==3,"an effect removed in a complete poll can trigger when truly received again");
+}
+
+void received_effects_do_not_guess_or_replay_late_metadata() {
+    Fixture f;f.player.buff_slots=8;f.start();
+    check(f.save(received_rule("buff_received","KNOWN_BUFF")).value("ok",false),"unknown-metadata beneficial rule saves");
+    check(f.save(received_rule("debuff_received","KNOWN_DEBUFF")).value("ok",false),"unknown-metadata detrimental rule saves");
+    f.chat.clear();f.tick();
+    put_known_buff(f,0,300,"Unknown venom","Detrimental");f.spells.erase(300);f.tick();
+    check(f.chat.empty(),"TLO classification alone cannot classify a spell missing from get_spell");
+    HailstoneSpell venom{};venom.size=sizeof(venom);venom.id=300;copy_text("Unknown venom",venom.name,sizeof(venom.name));f.spells[300]=venom;f.tick();
+    check(f.chat.empty(),"discovering metadata for an already present unknown effect is not a fresh arrival");
+    f.buffs.erase(0);f.tick();put_known_buff(f,0,300,"Unknown venom","Detrimental");f.tick();
+    check(chat_count(f,"KNOWN_DEBUFF")==1,"known metadata works on a later actual detrimental arrival");
+    put_known_buff(f,1,301,"Mismatched record","Beneficial");f.spells[301].id=999;f.tick();
+    check(chat_count(f,"KNOWN_BUFF")==0,"get_spell returning the wrong spell ID cannot classify the requested effect");
+    f.spells[301].id=301;f.tick();check(chat_count(f,"KNOWN_BUFF")==0,"repairing mismatched metadata while active remains quiet");
+    put_known_buff(f,2,302,"Unresolved ward","1");f.tick();
+    check(chat_count(f,"KNOWN_BUFF")==0,"numeric TLO values are not guessed as beneficial");
+    f.parsed["${Spell[302].SpellType}"]="Beneficial";f.tick();
+    check(chat_count(f,"KNOWN_BUFF")==0,"late exact classification does not replay an earlier unknown arrival");
+    f.buffs.erase(2);f.tick();put_known_buff(f,2,302,"Unresolved ward","Beneficial");f.tick();
+    check(chat_count(f,"KNOWN_BUFF")==1,"unknown classification is not cached permanently after it becomes available");
+    put_known_buff(f,3,303,"Lowercase claim","beneficial");f.tick();
+    check(chat_count(f,"KNOWN_BUFF")==1,"only the documented exact SpellType strings are accepted");
+}
+
+void incomplete_buff_polls_preserve_arrivals_and_missing_rules() {
+    Fixture f;f.player.buff_slots=4;put_known_buff(f,0,400,"Clarity","Beneficial");f.start();
+    check(f.save(received_rule("buff_received","RECEIVED_REQUIRED")).value("ok",false),"incomplete-poll arrival rule saves");
+    auto missing=low_health_rule();missing["event"]="buff_missing";missing["subject"]="Clarity";missing["message"]="MISSING_REQUIRED";
+    check(f.save(missing).value("ok",false),"incomplete-poll missing-buff rule saves");
+    f.chat.clear();f.tick();check(f.chat.empty(),"present required buff establishes a quiet baseline");
+    f.failed_buff_slots.insert(0);f.tick();check(f.chat.empty(),"unreadable occupied slot does not mean the required buff is missing");
+    f.failed_buff_slots.clear();f.tick();check(f.chat.empty(),"recovered slot read does not fabricate a new receipt");
+    f.player.buff_slots=0;f.tick();f.player.buff_slots=4;f.tick();
+    check(f.chat.empty(),"zero advertised slots do not clear the previous complete buff baseline");
+    f.player.buff_slots=513;f.tick();f.player.buff_slots=4;f.tick();
+    check(f.chat.empty(),"oversized advertised slot counts do not create a new baseline");
+    const auto get_buff=f.api.get_buff;f.api.get_buff=nullptr;f.tick();f.api.get_buff=get_buff;f.tick();
+    check(f.chat.empty(),"temporarily unavailable get_buff preserves comparison state");
+    f.buffs.erase(0);f.failed_buff_slots.insert(3);f.tick();
+    check(f.chat.empty(),"an incomplete poll cannot prove absence even when another slot is the failed read");
+    f.failed_buff_slots.clear();f.tick();check(chat_count(f,"MISSING_REQUIRED")==1,"a subsequent complete poll can prove a buff is missing");
+    put_known_buff(f,0,400,"Clarity","Beneficial");f.tick();
+    check(chat_count(f,"RECEIVED_REQUIRED")==1,"return after confirmed absence triggers one actual receipt");
+}
+
+void received_effect_classification_cache_is_zone_scoped() {
+    Fixture f;f.player.buff_slots=4;f.start();
+    check(f.save(received_rule("buff_received","ZONE_SCOPED_BUFF")).value("ok",false),"zone-scoped classification rule saves");
+    f.chat.clear();f.tick();put_known_buff(f,0,500,"Zone ward","Beneficial");f.tick();
+    check(chat_count(f,"ZONE_SCOPED_BUFF")==1,"known classification is used in its original zone");
+    f.buffs.clear();f.tick();
+    OnBeginZone();f.player.in_zone=0;SetGameState(GAMESTATE_LOGGINGIN);f.tick();
+    f.player.zone_id=3;f.player.in_zone=1;SetGameState(GAMESTATE_INGAME);OnZoned();f.tick();
+    put_known_buff(f,0,500,"Zone ward","Beneficial");f.spells[500].id=999;f.tick();
+    check(chat_count(f,"ZONE_SCOPED_BUFF")==1,"classification from an earlier zone cannot override newly unavailable metadata");
+    f.spells[500].id=500;f.tick();check(chat_count(f,"ZONE_SCOPED_BUFF")==1,"metadata restored after zoning does not replay an active effect");
+    f.buffs.clear();f.tick();put_known_buff(f,0,500,"Zone ward","Beneficial");f.tick();
+    check(chat_count(f,"ZONE_SCOPED_BUFF")==2,"new-zone classification becomes usable on a later actual receipt");
+}
 } // namespace
 
 int main() {
     try {
         actions_and_persistence(); sharing_and_validation(); evaluation_and_lifecycle(); snapshot_adapter(); damaged_settings_are_preserved(); incomplete_rules_cannot_be_enabled(); window_visibility_survives_zoning_and_reload(); damaged_window_preferences_do_not_reopen_or_change_alerts(); unwritable_first_use_does_not_create_a_popup_loop();
+        received_effects_use_known_spell_types();received_effects_do_not_guess_or_replay_late_metadata();incomplete_buff_polls_preserve_arrivals_and_missing_rules();received_effect_classification_cache_is_zone_scoped();
         std::cout << "Plugin integration checks passed: " << checks << '\n';
         return 0;
     } catch (const std::exception& e) {

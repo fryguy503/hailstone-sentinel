@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,7 @@ struct Buff {
     std::string name;
     std::optional<double> seconds;
     bool invisible = false;
+    std::optional<bool> beneficial;
 };
 struct Snapshot {
     bool in_zone = false, alive = false;
@@ -34,6 +36,7 @@ struct Snapshot {
     uint32_t target_id = 0, pet_id = 0;
     std::vector<Entity> entities;
     std::vector<Buff> buffs;
+    bool buffs_complete = true;
 };
 struct Fired {
     std::string id, name, message, speech;
@@ -68,6 +71,8 @@ private:
         uint64_t counter = 0;
         bool pet_initialized = false;
         uint32_t pet_id = 0;
+        bool buffs_initialized = false;
+        std::set<uint32_t> buff_ids;
         std::string fingerprint;
     };
     std::map<std::string, RuleState> state_;

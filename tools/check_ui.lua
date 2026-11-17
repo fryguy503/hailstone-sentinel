@@ -4,6 +4,7 @@
 local windows,colors,vars,depth={},0,0,0
 local click=nil
 local inputs,labels,textcolors={}, {}, {}
+local fields,last_saved={}
 local nextsize,sizes,background=nil,{},nil
 local colorstack={}
 local function hit(label) if click==label then click=nil;return true end;return false end
@@ -37,7 +38,7 @@ function ui.Button(label) return hit(label) end
 function ui.SmallButton(label) return hit(label) end
 function ui.Selectable(label) labels[#labels+1]=label;return hit(label) end
 function ui.Checkbox(label,v) if hit(label) then return not v,true end;return v,false end
-function ui.InputText(id,v) assert(type(v)=='string');if inputs[id]~=nil then return inputs[id],inputs[id]~=v end;return v,false end
+function ui.InputText(id,v) fields[id]=true;assert(type(v)=='string');if inputs[id]~=nil then return inputs[id],inputs[id]~=v end;return v,false end
 function ui.InputTextWithHint(id,_,v) return ui.InputText(id,v) end
 function ui.InputTextMultiline(_,v) assert(type(v)=='string','multiline value must be text');return v,false end
 function ui.SliderInt(_,v) return v,false end
@@ -104,11 +105,15 @@ tell.id='tell';tell.name='Never miss a tell';tell.event='incoming_tell'
 state.presets={rule,pet,tell}
 state.catalog[#state.catalog+1]={id='pet_health_below',label='Pet health is low',group='Party',threshold_label='Health (%)'}
 state.catalog[#state.catalog+1]={id='incoming_tell',label='Receive a tell',group='Messages'}
+for _,kind in ipairs({'buff','debuff'}) do
+  state.catalog[#state.catalog+1]={id=kind..'_received',label='I receive a '..kind,group='Buffs',
+    subject_label='Exact spell name (optional)',threshold_label='',help='Watch newly received effects.'}
+end
 local calls,export_error={},false
 local p={}
 function p.state() return state end
 function p.action(op,id) calls[#calls+1]=op;return {ok=true,id=id} end
-function p.save(a) calls[#calls+1]='save';return {ok=true,id=a.id or 'new'} end
+function p.save(a) last_saved=a;calls[#calls+1]='save';return {ok=true,id=a.id or 'new'} end
 function p.preview(a) calls[#calls+1]='preview';return {ok=true} end
 function p.export() if export_error then return {ok=false,error='Export is too large.'} end;return '{"format":"hailstone-sentinel"}' end
 function p.inspect() return {ok=true,alerts={rule}} end
@@ -118,12 +123,19 @@ eq={Plugin=function() return p end}
 assert(loadfile(arg[1] or 'ui/modern/sentinel.lua'))()
 local frames=0
 local function frame(button)
-  labels={};click=button;windows.Sentinel();windows['Sentinel overlay']()
+  labels={};fields={};click=button;windows.Sentinel();windows['Sentinel overlay']()
   assert(colors==0,'leaked colors '..colors);assert(vars==0,'leaked styles '..vars);assert(depth==0,'leaked windows '..depth)
   if button then assert(click==nil,'button not reached: '..button) end
   frames=frames+1
 end
 frame();frame('  Low health##one');frame('Edit alert');frame('Preview');frame('Cancel edits')
+for _,kind in ipairs({'buff','debuff'}) do
+  frame('+ New alert');frame('I receive a '..kind..'##'..kind..'_received')
+  assert(fields['##subject'] and not fields['##threshold'],'received effects need an optional name, without a threshold')
+  inputs['##subject']=kind=='buff' and 'Clarity' or '';frame();frame('Preview');frame('Save alert')
+  assert(last_saved.event==kind..'_received' and last_saved.subject==inputs['##subject'],'received effect selection and optional filter must save')
+  inputs['##subject']=nil
+end
 local function preset_rows()
   local count=0;for _,label in ipairs(labels) do if label:find('##preset-',1,true) then count=count+1 end end
   return count
