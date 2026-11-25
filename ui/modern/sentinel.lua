@@ -24,6 +24,9 @@ local function refresh_theme()
   C.active = c and (c.frameActive or c.selected)
   C.notification = c and c.chatBg
   C.notificationText = c and c.chatText
+  C.title = c and (c.title or c.window)
+  C.titleActive = c and (c.titleActive or C.title)
+  C.border = c and (c.border or c.edge)
   scale = T and T.C and math.max(0.85,T.S or 1,(ui.GetIO().uiScale or 1)*0.85) or math.max(0.7,ui.GetIO().uiScale or 1)
 end
 -- Semantic alert colors are deliberately independent from the current UI palette.
@@ -582,7 +585,7 @@ local function set_timer_profile(profile)
   end
 end
 local function timer_action(op,id,message)
-  return result(P.timer_action(op,id or ""),message)
+  return result(P.timer_action(op,id==nil and "" or id),message)
 end
 local function minimize_timer(plugin,id,layout)
   local label=id=="group" and "Timer pane" or "Timer"
@@ -592,23 +595,25 @@ end
 local function edit_timer(timer)
   timer_draft=timer and copy(timer) or {name="",duration=60,color="cyan",alpha=100,warning_at=0,warning_color="yellow",
     critical_at=0,critical_color="red"}
-  for _,key in ipairs({"duration","warning_at","critical_at"}) do timer_draft[key]=tostring(timer_draft[key]) end
+  for _,key in ipairs({"duration","warning_at","critical_at","dismiss_after"}) do timer_draft[key]=tostring(timer_draft[key] or 0) end
   timer_remove=nil
 end
 local function save_timer(start)
   local d=timer_draft
   local name=d.name:match("^%s*(.-)%s*$")
   local duration=math.tointeger(tonumber(d.duration))
+  local dismiss_after=math.tointeger(tonumber(d.dismiss_after))
   local warning=math.tointeger(tonumber(d.warning_at))
   local critical=math.tointeger(tonumber(d.critical_at))
   local message
   if name=="" then message="Enter a name for this timer."
   elseif not duration or duration<1 or duration>86400 then message="Duration must be a whole number from 1 to 86,400 seconds."
+  elseif not dismiss_after or dismiss_after<0 or dismiss_after>86400 then message="The hide delay must be a whole number from 0 to 86,400 seconds."
   elseif not warning or not critical or warning<0 or critical<0 or warning>duration or critical>duration then
     message="Enter whole seconds between 0 and the duration for each color threshold."
   elseif warning>0 and critical>=warning then message="Critical must have fewer seconds remaining than warning." end
   if message then result({ok=false,error=message});return end
-  local saved=P.timer_save({id=d.id,name=name,duration=duration,color=d.color,alpha=d.alpha,warning_at=warning,
+  local saved=P.timer_save({id=d.id,name=name,duration=duration,dismiss_after=dismiss_after,color=d.color,alpha=d.alpha,warning_at=warning,
     warning_color=d.warning_color,critical_at=critical,critical_color=d.critical_color})
   if result(saved,"Timer saved.") then
     timer_draft=nil
@@ -622,6 +627,9 @@ local function timer_editor()
   d.name=textfield("##timername",d.name,"Example: Lesson refresh",81)
   field("Duration in seconds")
   d.duration=textfield("##timerduration",d.duration,"1 to 86400",32,145*scale)
+  field("Hide after finishing (seconds)")
+  d.dismiss_after=textfield("##timerdismissafter",d.dismiss_after,"0 keeps it visible",32,145*scale)
+  ui.SameLine();muted("0 keeps the finished bar visible.")
   field("Starting color")
   d.color=combo("##timercolor",COLORS,d.color,208*scale)
   field("Opacity (%)")
@@ -671,13 +679,20 @@ local function timers()
   if grouped and st.timer_group_layout then
     local pane=st.timer_group_layout
     if ui.Button(pane.minimized and "Expand pane" or "Minimize pane") then minimize_timer(P,"group",pane) end
-    field("Pane opacity (%)")
-    ui.SetNextItemWidth(185*scale)
-    local alpha,changed=ui.SliderInt("##timerpaneopacity",timer_group_alpha_draft or pane.alpha or 100,10,100)
-    if changed then timer_group_alpha_draft=alpha end
-    if timer_group_alpha_draft then
-      ui.SameLine();if ui.Button("Apply pane opacity") and timer_action("group_alpha",alpha,"Timer pane opacity saved.") then
-        timer_group_alpha_draft=nil
+    ui.SameLine()
+    local hidden=pane.background==false
+    local next_hidden=check("Hide pane background",hidden)
+    if next_hidden~=hidden and timer_action("group_background",not next_hidden,
+        next_hidden and "Pane background hidden." or "Pane background shown.") then hidden=next_hidden end
+    if not hidden then
+      field("Pane background opacity (%)")
+      ui.SetNextItemWidth(185*scale)
+      local alpha,changed=ui.SliderInt("##timerpaneopacity",timer_group_alpha_draft or pane.alpha or 100,10,100)
+      if changed then timer_group_alpha_draft=alpha end
+      if timer_group_alpha_draft then
+        ui.SameLine();if ui.Button("Apply background opacity") and timer_action("group_alpha",alpha,"Pane background opacity saved.") then
+          timer_group_alpha_draft=nil
+        end
       end
     end
   end
@@ -858,9 +873,8 @@ local function group_hud_contents(plugin,timers,pane,locked)
   local gutter=locked and 0 or 6*scale
   local child_flags=ui.WindowFlags.NoBackground+(locked and ui.WindowFlags.NoInputs or 0)
   if ui.BeginChild("##timergrouplist",math.max(1,availw-gutter),math.max(1,availh-gutter),false,child_flags) then
-    local opacity=timer_alpha(pane)
     for i,timer in ipairs(timers) do
-      ui.PushStyleVar(ui.StyleVar.Alpha,timer_alpha(timer)*opacity)
+      ui.PushStyleVar(ui.StyleVar.Alpha,timer_alpha(timer))
       local time=timer.finished and "Done" or timer_clock(timer.remaining)
       local rx,ry=ui.GetCursorScreenPos()
       local rw=ui.GetContentRegionAvail()
@@ -891,8 +905,9 @@ end
 local function timer_hud(plugin,id,title,geometry,locked,sw,sh,mouse_down,mouse_released,contents,data)
   local saved_w,saved_h=geometry.width,geometry.height
   local minimized=geometry.minimized
+  local grouped=id=="group"
   local height_low,height_high=54,300
-  if id=="group" then height_low,height_high=80,1000 end
+  if grouped then height_low,height_high=80,1000 end
   local minw,minh=math.min(160*scale,sw),math.min(height_low*scale,sh)
   local maxw,maxh=math.min(1000*scale,sw),math.min(height_high*scale,sh)
   local w,h=clamp(saved_w*scale,minw,maxw),clamp(saved_h*scale,minh,maxh)
@@ -912,10 +927,24 @@ local function timer_hud(plugin,id,title,geometry,locked,sw,sh,mouse_down,mouse_
   if locked or minimized then flags=flags+f.NoResize
   elseif ui.SetNextWindowSizeConstraints then ui.SetNextWindowSizeConstraints(minw,minh,maxw,maxh) end
   local opacity=timer_alpha(geometry)
-  ui.PushStyleVar(ui.StyleVar.Alpha,opacity)
-  ui.SetNextWindowBgAlpha(0.96*opacity)
+  local background_alpha=0.96*opacity
+  local background_styles=0
+  if grouped then
+    if geometry.background==false then
+      flags=flags+f.NoBackground
+      background_alpha=0
+    end
+    local title_color=C.title or C.notification or {0.08,0.09,0.11}
+    background_styles=push_color(ui.Col.TitleBg,title_color,background_alpha)
+      +push_color(ui.Col.TitleBgActive,C.titleActive or title_color,background_alpha)
+      +push_color(ui.Col.Border,C.border or title_color,background_alpha)
+  else
+    ui.PushStyleVar(ui.StyleVar.Alpha,opacity)
+  end
+  ui.SetNextWindowBgAlpha(background_alpha)
   -- ### lets the name change without changing the ImGui ID for this timer.
   local visible=ui.Begin(visible_label(title).."###SentinelTimer-"..id,nil,flags)
+  if background_styles>0 then ui.PopStyleColor(background_styles) end
   if visible then
     local actual_x,actual_y=ui.GetWindowPos()
     local actual_w,actual_h=ui.GetWindowSize()
@@ -937,7 +966,7 @@ local function timer_hud(plugin,id,title,geometry,locked,sw,sh,mouse_down,mouse_
     contents(plugin,data,geometry,locked)
   end
   ui.End()
-  ui.PopStyleVar()
+  if not grouped then ui.PopStyleVar() end
 end
 local function draw_timer_hud(p,s,io)
   set_timer_profile(s.timer_profile)

@@ -10,7 +10,7 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?")
-DEFAULT_VERSION = "1.0.0-preview.6"
+DEFAULT_VERSION = "1.0.0-preview.7"
 PLATFORMS = {"windows-x64": ".dll", "linux-x64": ".so", "macos-arm64": ".dylib"}
 FIELDS = ("name", "kind", "version", "author", "description", "min_client", "caps")
 CAPABILITIES = ("read", "commands", "target", "actions", "move", "chat", "events", "ui",

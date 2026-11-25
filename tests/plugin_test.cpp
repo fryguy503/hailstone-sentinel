@@ -729,12 +729,87 @@ void timer_bars_save_layout_and_keep_independent_deadlines() {
     check(action("delete", first) && !action("start", first) && f.state().at("timers").size() == 1, "deleting a timer removes it from state and actions");
 }
 
+void timer_group_background_migrates_and_persists() {
+    Fixture f;
+    const auto settings_dir = f.root / f.character;
+    fs::create_directories(settings_dir);
+    const Json preview_six = {{"version", 1}, {"timers_grouped", true},
+        {"timer_group_layout", {{"x", .5}, {"y", .4}, {"width", 400}, {"height", 410}, {"minimized", false}, {"alpha", 58}}}};
+    { std::ofstream out(settings_dir / "config.json"); out << preview_six.dump(); }
+    f.start();
+    auto pane = f.state().at("timer_group_layout");
+    check(pane.at("background") == true && pane.at("alpha") == 58,
+        "existing pane settings default to showing the background at the saved opacity");
+
+    check(!f.call("timer_action", Json::array({"group_background", 0})).value("ok", true),
+        "pane background visibility requires a boolean");
+    check(f.call("timer_action", Json::array({"group_background", false})).value("ok", false), "hide the group pane background");
+    check(f.call("timer_layout", Json::array({"group", .3, .2, 480, 520, false})).value("ok", false),
+        "pane geometry can change with the background hidden");
+    f.stop();
+    f.start();
+    pane = f.state().at("timer_group_layout");
+    check(pane.at("background") == false && pane.at("alpha") == 58 && pane.at("width") == 480 && pane.at("height") == 520 &&
+        f.state().at("timers_grouped") == true, "reload preserves visibility independently of opacity, geometry and grouping");
+
+    check(f.call("timer_action", Json::array({"group_background", true})).value("ok", false), "restore the group pane background");
+    f.stop();
+    f.start();
+    pane = f.state().at("timer_group_layout");
+    check(pane.at("background") == true && pane.at("alpha") == 58, "restoring the pane background keeps its opacity");
+}
+
+void timers_auto_dismiss_after_completion_rules() {
+    Fixture f;
+    f.start();
+    Json timer = {{"name", "Short timer"}, {"duration", 1}, {"color", "cyan"}, {"warning_at", 0},
+        {"warning_color", "yellow"}, {"critical_at", 0}, {"critical_color", "red"}, {"dismiss_after", 2}};
+    const auto id = f.call("timer_save", Json::array({timer})).at("id").get<std::string>();
+    const Json completion = {{"event", "timer_remaining"}, {"subject", id}, {"threshold", 0}, {"message", "SHORT_TIMER_DONE"},
+        {"chat", true}, {"overlay", false}, {"sound", false}, {"cooldown", 0}};
+    check(f.save(completion).value("ok", false), "save a completion rule on an auto-dismissing timer");
+    auto read = [&] { return f.state().at("timers").front(); };
+    auto start = [&] { return f.call("timer_action", Json::array({"start", id})).value("ok", false); };
+
+    check(start(), "start the timer before its first completion");
+    f.tick();
+    check(read().at("finished") == true && chat_count(f, "SHORT_TIMER_DONE") == 1, "completion fires and shows a finished bar");
+    f.tick();
+    check(read().at("finished") == true, "the finished bar remains through its configured delay");
+    f.tick();
+    check(read().at("finished") == false && read().at("running") == false && read().at("id") == id &&
+        read().at("dismiss_after") == 2, "dismiss only the completed run at its delay deadline");
+
+    check(start(), "a dismissed definition can start the same timer again");
+    OnBeginZone(); f.player.in_zone = 0; SetGameState(GAMESTATE_LOGGINGIN);
+    f.tick(); f.tick(); f.tick();
+    check(chat_count(f, "SHORT_TIMER_DONE") == 1, "completion has not been sampled in transit");
+    f.player.in_zone = 1; f.player.zone_id = 3; SetGameState(GAMESTATE_INGAME); OnZoned(); f.tick();
+    check(chat_count(f, "SHORT_TIMER_DONE") == 2 && read().at("finished") == false,
+        "the completion rule fires on the first in-zone sample even if the hide delay has elapsed");
+
+    auto preview = low_health_rule();
+    preview["timer_id"] = id;
+    check(f.call("preview", Json::array({preview})).value("ok", false), "preview the auto-dismissing timer");
+    f.tick(); f.tick(); f.tick();
+    check(chat_count(f, "SHORT_TIMER_DONE") == 2 && read().at("finished") == false && read().at("running") == false,
+        "preview runs also dismiss without triggering live completion rules");
+
+    timer["id"] = id;
+    timer["dismiss_after"] = 1.5;
+    check(!f.call("timer_save", Json::array({timer})).value("ok", true) && read().at("dismiss_after") == 2,
+        "fractional hide delays cannot overwrite the saved delay");
+    f.stop(); f.start();
+    check(read().at("dismiss_after") == 2, "the per-timer hide delay survives reload");
+}
+
 void chat_can_start_a_timer_and_complete_a_second_rule() {
     Fixture f;
     f.start();
     Json timer = {{"name", "Gate check"}, {"duration", 3}, {"color", "cyan"}, {"warning_at", 0},
         {"warning_color", "yellow"}, {"critical_at", 0}, {"critical_color", "red"}};
     const auto gate = f.call("timer_save", Json::array({timer})).at("id").get<std::string>();
+    check(f.state().at("timers").front().at("dismiss_after") == 0, "timer definitions without a delay keep the finished bar");
     timer["name"] = "Prepare";
     const auto prepare = f.call("timer_save", Json::array({timer})).at("id").get<std::string>();
     const Json text_trigger = {{"name", "Encounter call"}, {"event", "chat_text_match"}, {"subject", "*open the gates*"},
@@ -813,6 +888,8 @@ int main() {
         actions_and_persistence(); sharing_and_validation(); evaluation_and_lifecycle(); snapshot_adapter(); damaged_settings_are_preserved(); incomplete_rules_cannot_be_enabled(); window_visibility_survives_zoning_and_reload(); damaged_window_preferences_do_not_reopen_or_change_alerts(); unwritable_first_use_does_not_create_a_popup_loop();
         received_effects_use_known_spell_types();received_effects_do_not_guess_or_replay_late_metadata();incomplete_buff_polls_preserve_arrivals_and_missing_rules();received_effect_classification_cache_is_zone_scoped();
         timer_bars_save_layout_and_keep_independent_deadlines();
+        timer_group_background_migrates_and_persists();
+        timers_auto_dismiss_after_completion_rules();
         chat_can_start_a_timer_and_complete_a_second_rule();
         std::cout << "Plugin integration checks passed: " << checks << '\n';
         return 0;

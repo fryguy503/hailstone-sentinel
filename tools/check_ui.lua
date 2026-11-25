@@ -10,12 +10,20 @@ local nextpos,current_window,rects,draws,window_flags=nil,nil,{},{},{}
 local mouse_down,mouse_released=false,false
 local colorstack={}
 local varstack,window_bg_alpha,next_bg={}, {},nil
+local window_title_alpha,window_style_alpha,text_opacity={},{},{}
 local clip_depth,child_flags=0,{}
 local function hit(label) if click==label and (not click_combo or current_combo==click_combo) then click=nil;return true end;return false end
 local constant_id=0
 local constants=setmetatable({}, {__index=function(t,k) constant_id=constant_id+1;rawset(t,k,constant_id);return constant_id end})
 ui=setmetatable({Col=constants,StyleVar=constants,WindowFlags=constants,Cond=constants,InputTextFlags=constants}, {
   __index=function(_,k) error('Unmocked ui API: '..k) end})
+local function style_opacity()
+  for i=#varstack,1,-1 do if varstack[i][1]==ui.StyleVar.Alpha then return varstack[i][2] end end
+  return 1
+end
+local function color_alpha(key)
+  for i=#colorstack,1,-1 do if colorstack[i][1]==key then return colorstack[i][5] end end
+end
 function ui.window(name,fn) windows[name]=fn end
 function ui.Begin(name,_,flags)
   depth=depth+1
@@ -24,6 +32,8 @@ function ui.Begin(name,_,flags)
   if nextpos then rect[1],rect[2]=table.unpack(nextpos);nextpos=nil end
   if nextsize then sizes[name]=nextsize;rect[3],rect[4]=table.unpack(nextsize);nextsize=nil end
   if next_bg then window_bg_alpha[name]=next_bg;next_bg=nil end
+  window_title_alpha[name]=color_alpha(ui.Col.TitleBg)
+  window_style_alpha[name]=style_opacity()
   rects[name]=rect;draws[name]={};window_flags[name]=flags
   return true,true
 end
@@ -69,21 +79,20 @@ function ui.IsWindowHovered() return false end
 local texts={}
 local function record(text)
   texts[text]=true
+  text_opacity[text]=style_opacity()*(color_alpha(ui.Col.Text) or 1)
   for i=#colorstack,1,-1 do local c=colorstack[i];if c[1]==ui.Col.Text then textcolors[text]={c[2],c[3],c[4],c[5]};break end end
 end
 function ui.Text(text) record(text) end
 function ui.TextWrapped(text) record(text) end
-function ui.TextColored(r,g,b,a,text) texts[text]=true;textcolors[text]={r,g,b,a} end
+function ui.TextColored(r,g,b,a,text) texts[text]=true;textcolors[text]={r,g,b,a};text_opacity[text]=style_opacity()*a end
 function ui.SetNextWindowSize(w,h) nextsize={w,h} end
 function ui.SetNextWindowPos(x,y) nextpos={x,y} end
 function ui.SetNextWindowBgAlpha(a) next_bg=a end
 function ui.PushClipRect() clip_depth=clip_depth+1 end
 function ui.PopClipRect() clip_depth=clip_depth-1;assert(clip_depth>=0) end
 function ui.DrawRectFilled(x1,y1,x2,y2,r,g,b,a)
-  local opacity=1
-  for i=#varstack,1,-1 do if varstack[i][1]==ui.StyleVar.Alpha then opacity=varstack[i][2];break end end
   local window_draws=draws[current_window]
-  window_draws[#window_draws+1]={x1,y1,x2,y2,r,g,b,a,opacity}
+  window_draws[#window_draws+1]={x1,y1,x2,y2,r,g,b,a,style_opacity()}
 end
 for _,name in ipairs({'TextDisabled','Dummy','Separator','SetTooltip','SetNextItemWidth','SetWindowFontScale',
  'DrawCircle','DrawLine','DrawCircleFilled','DrawRectGradient','SetCursorScreenPos',
@@ -161,6 +170,7 @@ function p.timer_action(op,id)
   if op=='lock' or op=='unlock' then state.timers_locked=op=='lock';return {ok=true} end
   if op=='group' or op=='separate' then state.timers_grouped=op=='group';return {ok=true} end
   if op=='group_alpha' then state.timer_group_layout.alpha=id;return {ok=true} end
+  if op=='group_background' then assert(type(id)=='boolean');state.timer_group_layout.background=id;return {ok=true} end
   local t=state.timers[1]
   assert(id==t.id)
   if op=='start' then t.remaining,t.run_duration,t.running,t.finished=t.duration,t.duration,true,false end
@@ -179,7 +189,7 @@ eq={Plugin=function() return p end}
 assert(loadfile(arg[1] or 'ui/modern/sentinel.lua'))()
 local frames=0
 local function frame(button,combo)
-  labels={};fields={};texts={};click=button;click_combo=combo;windows.Sentinel();windows['Sentinel overlay']()
+  labels={};fields={};texts={};text_opacity={};click=button;click_combo=combo;windows.Sentinel();windows['Sentinel overlay']()
   assert(colors==0,'leaked colors '..colors);assert(vars==0,'leaked styles '..vars);assert(depth==0,'leaked windows '..depth)
   assert(clip_depth==0,'leaked clips '..clip_depth)
   if button then assert(click==nil,'button not reached: '..button) end
@@ -239,9 +249,13 @@ inputs['##timerwarning'],inputs['##timercritical']='7','7'
 inputs['##timeropacity']=70
 frame('Save & start');assert(not saved_timer,'critical must be below warning when both are enabled')
 inputs['##timercritical']='3'
+inputs['##timerdismissafter']='-1'
+frame('Save & start');assert(not saved_timer,'the auto-dismiss delay cannot be negative')
+inputs['##timerdismissafter']='4'
 frame('Save & start')
 assert(saved_timer.name=='Elixir refresh' and saved_timer.duration==12 and saved_timer.warning_at==7 and saved_timer.critical_at==3)
 assert(saved_timer.alpha==70,'timer opacity belongs to the saved definition')
+assert(saved_timer.dismiss_after==4,'the auto-dismiss delay belongs to the saved definition')
 assert(timer_actions[1][1]=='start' and timer_actions[1][2]=='race','save and start must use the new ID')
 inputs={}
 local hud='Elixir refresh###SentinelTimer-race'
@@ -279,9 +293,26 @@ frame('Group timer bars')
 local group_hud='Sentinel timers###SentinelTimer-group'
 assert(rects[group_hud][3]==320 and rects[group_hud][4]==220,'group should use independent default geometry')
 assert(#draws[group_hud]==3 and texts['Second bar'],'group should draw both active timers and retain compact rows')
-inputs['##timerpaneopacity']=55;frame();frame('Apply pane opacity');inputs={}
-assert(state.timer_group_layout.alpha==55 and window_bg_alpha[group_hud]==.96*.55)
-assert(draws[group_hud][2][9]==.7*.55 and draws[group_hud][3][9]==.4*.55,'group rows combine both alpha settings')
+local shown_flags=window_flags[group_hud]
+local function check_group_content()
+  assert(window_style_alpha[group_hud]==1,'pane title and controls keep default alpha')
+  assert(draws[group_hud][2][9]==.7 and draws[group_hud][3][9]==.4,'group bars keep their individual alpha')
+  assert(text_opacity['Elixir refresh']==.7 and text_opacity['Second bar']==.4 and text_opacity['0:05']==.4,
+    'group row names and clocks keep their individual alpha')
+end
+check_group_content()
+inputs['##timerpaneopacity']=55;frame();frame('Apply background opacity');inputs={}
+assert(state.timer_group_layout.alpha==55 and window_bg_alpha[group_hud]==.96*.55 and window_title_alpha[group_hud]==.96*.55,
+  'saved background opacity applies to the pane and title strip')
+check_group_content()
+frame('Hide pane background')
+assert(state.timer_group_layout.background==false and window_bg_alpha[group_hud]==0 and window_title_alpha[group_hud]==0,
+  'hide removes both pane backgrounds')
+assert(window_flags[group_hud]==shown_flags+ui.WindowFlags.NoBackground,'hidden pane uses a background-free window')
+check_group_content()
+frame('Hide pane background')
+assert(state.timer_group_layout.background==true and window_bg_alpha[group_hud]==.96*.55 and window_flags[group_hud]==shown_flags,
+  'show restores the previous background opacity')
 mouse_down=true;rects[group_hud]={400,275,360,420};frame()
 mouse_down,mouse_released=false,true;frame();mouse_released=false
 local group_layout=layouts[#layouts]

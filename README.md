@@ -60,9 +60,11 @@ Open `/sentinel`, choose **Timer bars**, then **+ New timer**. Give the timer a 
 
 For a visible reminder, set a warning and a critical color in seconds remaining. A 90-second **Check respawn** timer could start cyan, turn yellow at 30 seconds, and turn red at 10 seconds. Each threshold starts at zero, which turns that color change off.
 
+Set **Hide after finishing (seconds)** to 1 to 86,400 to auto-dismiss the bar after it reaches zero. Enter `0` to leave the finished bar visible until you dismiss it. Finish alerts still fire, and the saved timer can be started again.
+
 With **Lock timer bars** cleared, drag a running bar by its title and resize it from the lower-right corner. Turn on **Group timer bars** to put active countdowns in one movable, resizable **Sentinel timers** pane. **Minimize** makes an individual countdown compact in either layout. In grouped mode, **Minimize pane** and **Expand pane** control the whole pane. Lock the overlays to let game clicks pass through them.
 
-Each timer has its own **Opacity (%)** in the timer editor. In grouped mode, use **Pane opacity (%)** and **Apply pane opacity** to adjust the whole pane. Both controls range from 10% to 100%.
+Each timer has its own **Opacity (%)** in the timer editor. In grouped mode, use **Pane background opacity (%)** and **Apply background opacity** to fade the background and title strip. Both controls range from 10% to 100%. Turn on **Hide pane background** for a fully transparent background and title strip. Timer rows keep their individual opacity settings.
 
 Timer definitions and layout mode are saved per server and character, along with separate position, size, and minimized settings for individual bars and the grouped pane. Running countdowns continue when you zone on the same character. Switching characters or reloading the plugin clears the running countdowns. **Master Pause** pauses automatic rules and the timers they would start. You can still start timers by hand, and active timers keep counting.
 

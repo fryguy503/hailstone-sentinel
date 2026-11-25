@@ -99,7 +99,8 @@ void presentation_defaults(Json& c) {
     c["timers"] = Json::array();
     c["timers_locked"] = false;
     c["timers_grouped"] = false;
-    c["timer_group_layout"] = {{"x", .63}, {"y", .17}, {"width", 320}, {"height", 220}, {"minimized", false}, {"alpha", 100}};
+    c["timer_group_layout"] = {{"x", .63}, {"y", .17}, {"width", 320}, {"height", 220}, {"minimized", false},
+        {"alpha", 100}, {"background", true}};
 }
 int timer_integer(const Json& field, int low, int high, const char* message) {
     if (!field.is_number()) throw std::runtime_error(message);
@@ -129,12 +130,14 @@ Json timer_definition(const Json& raw) {
         throw std::runtime_error("Use a timer name up to 80 bytes without control characters.");
     const int duration = timer_integer(raw.at("duration"), 1, max_timer_seconds,
         "Duration must be a whole number from 1 to 86400 seconds.");
+    const int dismiss_after = timer_integer(raw.value("dismiss_after", Json(0)), 0, max_timer_seconds,
+        "Hide delay must be a whole number from 0 to 86400 seconds.");
     const char* threshold_help = "Thresholds must be whole seconds from zero to the timer duration.";
     const int warning = timer_integer(raw.at("warning_at"), 0, duration, threshold_help);
     const int critical = timer_integer(raw.at("critical_at"), 0, duration, threshold_help);
     if (warning && critical >= warning)
         throw std::runtime_error("The critical threshold must be lower than the warning threshold.");
-    return {{"name", name}, {"duration", duration}, {"color", timer_color(raw, "color")},
+    return {{"name", name}, {"duration", duration}, {"dismiss_after", dismiss_after}, {"color", timer_color(raw, "color")},
         {"warning_at", warning}, {"warning_color", timer_color(raw, "warning_color")},
         {"critical_at", critical}, {"critical_color", timer_color(raw, "critical_color")},
         {"alpha", timer_alpha(raw.value("alpha", Json(100)))}};
@@ -157,6 +160,7 @@ void load_timer_definitions(Json& config, const Json& raw) {
         const auto& pane = raw.at("timer_group_layout");
         config["timer_group_layout"] = timer_geometry(pane.at("x"), pane.at("y"), pane.at("width"), pane.at("height"), pane.at("minimized"), true);
         config["timer_group_layout"]["alpha"] = timer_alpha(pane.value("alpha", Json(100)));
+        config["timer_group_layout"]["background"] = pane.value("background", true);
     }
     if (!raw.contains("timers")) return;
     const auto& saved = raw.at("timers");
@@ -424,6 +428,17 @@ void sample_timers(uint64_t now) {
         run.previous_ms = remaining;
     }
 }
+void dismiss_finished_timers(uint64_t now) {
+    if (!snapshot.in_zone) return;
+    std::erase_if(timer_runs, [now](const auto& entry) {
+        const auto& [id, run] = entry;
+        if (run.deadline > now) return false;
+        const auto* timer = find_timer(id);
+        if (!timer) return false;
+        const int delay = timer->at("dismiss_after").get<int>();
+        return delay > 0 && now - run.deadline >= static_cast<uint64_t>(delay) * 1000;
+    });
+}
 std::string clock_text() {
     const auto t=std::time(nullptr);std::tm tm{};
 #ifdef _WIN32
@@ -516,7 +531,7 @@ Json arg(const HailstoneArgs* args,size_t n) {
     for(const auto* key:{"id","name","event","enabled","category","section","subsection","zone_id","subject",
         "threshold","message","cooldown","chat","overlay","sound","speech","volume","tone","sound_file",
         "speech_text","voice","rate","color","size","duration","overlay_x","overlay_y","overlay_locked","quiet",
-        "warning_at","warning_color","critical_at","critical_color","timer_id","alpha"}) {
+        "warning_at","warning_color","critical_at","critical_color","timer_id","alpha","dismiss_after"}) {
         HailstoneValue field{};if(host->arg_field(host->host,args,n,key,&field))object[key]=value(field);
     }return object;
 }
@@ -615,6 +630,12 @@ Json save_group_alpha(const Json& value) {
     if (alpha == opacity) return success();
     return change([&] { alpha = opacity; });
 }
+Json save_group_background(const Json& value) {
+    if (!value.is_boolean()) return failure("Expected a timer pane background state.");
+    auto& background = engine.config.at("timer_group_layout").at("background");
+    if (background == value) return success();
+    return change([&] { background = value; });
+}
 void output(HailstoneOut* out,const Json& j) {
     if(j.is_object()){host->out_begin_table(host->host,out);
         for(const auto& [key,item]:j.items()){host->out_key(host->host,out,key.c_str());output(out,item);}host->out_end(host->host,out);}
@@ -695,6 +716,7 @@ Json ui_call(Ui kind,const HailstoneArgs* args) {
         const auto op = arg(args, 0).get<std::string>();
         const auto target = arg(args, 1);
         if (op == "group_alpha") return save_group_alpha(target);
+        if (op == "group_background") return save_group_background(target);
         return timer_action(op, target.get<std::string>());
     }
     if(kind==Ui::Action) {const auto op=arg(args,0),id=arg(args,1);return action(op.is_string()?op.get<std::string>():"",id.is_string()?id.get<std::string>():"");}
@@ -791,7 +813,8 @@ HAILSTONE_API void ShutdownPlugin() noexcept {
 }
 HAILSTONE_API void OnPulse() noexcept {
     try {if(!initialized)return;const auto now=now_ms();if(now>=last_poll&&now-last_poll<100)return;last_poll=now;
-        refresh_snapshot();sample_timers(now);for(const auto& f:engine.evaluate(snapshot,now))deliver(f);}
+        refresh_snapshot();sample_timers(now);for(const auto& f:engine.evaluate(snapshot,now))deliver(f);
+        dismiss_finished_timers(now);}
     catch(...){log_error("Observation");}
 }
 HAILSTONE_API int OnIncomingChat(const char* line,uint32_t color) noexcept {
