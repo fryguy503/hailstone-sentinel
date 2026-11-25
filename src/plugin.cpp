@@ -100,7 +100,7 @@ void presentation_defaults(Json& c) {
     c["timers_locked"] = false;
     c["timers_grouped"] = false;
     c["timer_group_layout"] = {{"x", .63}, {"y", .17}, {"width", 320}, {"height", 220}, {"minimized", false},
-        {"alpha", 100}, {"background", true}};
+        {"alpha", 100}, {"background", true}, {"title_bar", true}};
 }
 int timer_integer(const Json& field, int low, int high, const char* message) {
     if (!field.is_number()) throw std::runtime_error(message);
@@ -161,6 +161,7 @@ void load_timer_definitions(Json& config, const Json& raw) {
         config["timer_group_layout"] = timer_geometry(pane.at("x"), pane.at("y"), pane.at("width"), pane.at("height"), pane.at("minimized"), true);
         config["timer_group_layout"]["alpha"] = timer_alpha(pane.value("alpha", Json(100)));
         config["timer_group_layout"]["background"] = pane.value("background", true);
+        config["timer_group_layout"]["title_bar"] = pane.value("title_bar", true);
     }
     if (!raw.contains("timers")) return;
     const auto& saved = raw.at("timers");
@@ -630,11 +631,11 @@ Json save_group_alpha(const Json& value) {
     if (alpha == opacity) return success();
     return change([&] { alpha = opacity; });
 }
-Json save_group_background(const Json& value) {
-    if (!value.is_boolean()) return failure("Expected a timer pane background state.");
-    auto& background = engine.config.at("timer_group_layout").at("background");
-    if (background == value) return success();
-    return change([&] { background = value; });
+Json save_group_visibility(const char* key, const Json& value) {
+    if (!value.is_boolean()) return failure("Expected a boolean timer pane visibility state.");
+    auto& setting = engine.config.at("timer_group_layout").at(key);
+    if (setting == value) return success();
+    return change([&] { setting = value; });
 }
 void output(HailstoneOut* out,const Json& j) {
     if(j.is_object()){host->out_begin_table(host->host,out);
@@ -716,7 +717,8 @@ Json ui_call(Ui kind,const HailstoneArgs* args) {
         const auto op = arg(args, 0).get<std::string>();
         const auto target = arg(args, 1);
         if (op == "group_alpha") return save_group_alpha(target);
-        if (op == "group_background") return save_group_background(target);
+        if (op == "group_background") return save_group_visibility("background", target);
+        if (op == "group_title") return save_group_visibility("title_bar", target);
         return timer_action(op, target.get<std::string>());
     }
     if(kind==Ui::Action) {const auto op=arg(args,0),id=arg(args,1);return action(op.is_string()?op.get<std::string>():"",id.is_string()?id.get<std::string>():"");}

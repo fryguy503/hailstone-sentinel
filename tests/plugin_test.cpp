@@ -729,7 +729,7 @@ void timer_bars_save_layout_and_keep_independent_deadlines() {
     check(action("delete", first) && !action("start", first) && f.state().at("timers").size() == 1, "deleting a timer removes it from state and actions");
 }
 
-void timer_group_background_migrates_and_persists() {
+void timer_group_visibility_migrates_and_persists() {
     Fixture f;
     const auto settings_dir = f.root / f.character;
     fs::create_directories(settings_dir);
@@ -738,25 +738,34 @@ void timer_group_background_migrates_and_persists() {
     { std::ofstream out(settings_dir / "config.json"); out << preview_six.dump(); }
     f.start();
     auto pane = f.state().at("timer_group_layout");
-    check(pane.at("background") == true && pane.at("alpha") == 58,
-        "existing pane settings default to showing the background at the saved opacity");
+    check(pane.at("background") == true && pane.at("title_bar") == true && pane.at("alpha") == 58,
+        "existing pane settings default to showing the title and the background at the saved opacity");
 
     check(!f.call("timer_action", Json::array({"group_background", 0})).value("ok", true),
         "pane background visibility requires a boolean");
     check(f.call("timer_action", Json::array({"group_background", false})).value("ok", false), "hide the group pane background");
+    check(!f.call("timer_action", Json::array({"group_title", "false"})).value("ok", true) &&
+        f.state().at("timer_group_layout").at("title_bar") == true, "pane title visibility requires a boolean");
+    check(f.call("timer_action", Json::array({"group_title", false})).value("ok", false), "hide the group pane title");
     check(f.call("timer_layout", Json::array({"group", .3, .2, 480, 520, false})).value("ok", false),
         "pane geometry can change with the background hidden");
     f.stop();
     f.start();
     pane = f.state().at("timer_group_layout");
-    check(pane.at("background") == false && pane.at("alpha") == 58 && pane.at("width") == 480 && pane.at("height") == 520 &&
+    check(pane.at("background") == false && pane.at("title_bar") == false &&
+        pane.at("alpha") == 58 && pane.at("width") == 480 && pane.at("height") == 520 &&
         f.state().at("timers_grouped") == true, "reload preserves visibility independently of opacity, geometry and grouping");
 
     check(f.call("timer_action", Json::array({"group_background", true})).value("ok", false), "restore the group pane background");
     f.stop();
     f.start();
     pane = f.state().at("timer_group_layout");
-    check(pane.at("background") == true && pane.at("alpha") == 58, "restoring the pane background keeps its opacity");
+    check(pane.at("background") == true && pane.at("title_bar") == false && pane.at("alpha") == 58,
+        "restoring the pane background keeps the title hidden and retains its opacity");
+    check(f.call("timer_action", Json::array({"group_title", true})).value("ok", false), "restore the group pane title");
+    f.stop();
+    f.start();
+    check(f.state().at("timer_group_layout").at("title_bar") == true, "restored pane title survives reload");
 }
 
 void timers_auto_dismiss_after_completion_rules() {
@@ -888,7 +897,7 @@ int main() {
         actions_and_persistence(); sharing_and_validation(); evaluation_and_lifecycle(); snapshot_adapter(); damaged_settings_are_preserved(); incomplete_rules_cannot_be_enabled(); window_visibility_survives_zoning_and_reload(); damaged_window_preferences_do_not_reopen_or_change_alerts(); unwritable_first_use_does_not_create_a_popup_loop();
         received_effects_use_known_spell_types();received_effects_do_not_guess_or_replay_late_metadata();incomplete_buff_polls_preserve_arrivals_and_missing_rules();received_effect_classification_cache_is_zone_scoped();
         timer_bars_save_layout_and_keep_independent_deadlines();
-        timer_group_background_migrates_and_persists();
+        timer_group_visibility_migrates_and_persists();
         timers_auto_dismiss_after_completion_rules();
         chat_can_start_a_timer_and_complete_a_second_rule();
         std::cout << "Plugin integration checks passed: " << checks << '\n';

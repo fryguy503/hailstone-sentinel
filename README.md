@@ -66,6 +66,8 @@ With **Lock timer bars** cleared, drag a running bar by its title and resize it 
 
 Each timer has its own **Opacity (%)** in the timer editor. In grouped mode, use **Pane background opacity (%)** and **Apply background opacity** to fade the background and title strip. Both controls range from 10% to 100%. Turn on **Hide pane background** for a fully transparent background and title strip. Timer rows keep their individual opacity settings.
 
+The grouped pane opens with its title and timer count visible. Turn on **Hide pane title bar** to leave just the timer rows. With the layout unlocked, drag the pane by its body. Use **Minimize pane** and **Expand pane** from the **Timer bars** tab.
+
 Timer definitions and layout mode are saved per server and character, along with separate position, size, and minimized settings for individual bars and the grouped pane. Running countdowns continue when you zone on the same character. Switching characters or reloading the plugin clears the running countdowns. **Master Pause** pauses automatic rules and the timers they would start. You can still start timers by hand, and active timers keep counting.
 
 ### Start a timer from chat and get an alert when it ends

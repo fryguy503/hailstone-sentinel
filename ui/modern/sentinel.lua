@@ -664,6 +664,7 @@ local function timers()
   if next_locked~=locked then timer_action(next_locked and "lock" or "unlock",nil,next_locked and "Timer bars locked." or "Timer bars unlocked.") end
   ui.SameLine()
   local grouped=st.timers_grouped==true
+  local pane=grouped and st.timer_group_layout
   local next_grouped=check("Group timer bars",grouped)
   if next_grouped~=grouped and timer_action(next_grouped and "group" or "separate",nil,
       next_grouped and "Showing a single timer pane." or "Showing separate timer bars.") then
@@ -672,18 +673,25 @@ local function timers()
   gap(4)
   if locked then
     ui.TextWrapped("Locked bars let clicks pass through. Unlock to move or resize them.")
+  elseif pane and pane.title_bar==false then
+    ui.TextWrapped("Drag the timer pane by an empty area. Resize from the lower-right corner.")
   else
     ui.TextWrapped(grouped and "Drag the timer pane by its title. Resize from the lower-right corner."
       or "Drag a running bar by its title. Resize from the lower-right corner.")
   end
-  if grouped and st.timer_group_layout then
-    local pane=st.timer_group_layout
+  if pane then
     if ui.Button(pane.minimized and "Expand pane" or "Minimize pane") then minimize_timer(P,"group",pane) end
     ui.SameLine()
     local hidden=pane.background==false
     local next_hidden=check("Hide pane background",hidden)
     if next_hidden~=hidden and timer_action("group_background",not next_hidden,
         next_hidden and "Pane background hidden." or "Pane background shown.") then hidden=next_hidden end
+    ui.SameLine()
+    local title_hidden=pane.title_bar==false
+    local next_title_hidden=check("Hide pane title bar",title_hidden)
+    if next_title_hidden~=title_hidden then
+      timer_action("group_title",not next_title_hidden,next_title_hidden and "Pane title bar hidden." or "Pane title bar shown.")
+    end
     if not hidden then
       field("Pane background opacity (%)")
       ui.SetNextItemWidth(185*scale)
@@ -858,15 +866,17 @@ local function timer_hud_contents(plugin,timer,_,locked)
   end
 end
 local function group_hud_contents(plugin,timers,pane,locked)
-  local x,y=ui.GetCursorScreenPos()
-  local width=ui.GetContentRegionAvail()
-  muted(#timers..(#timers==1 and " timer" or " timers"))
-  if not locked then
-    ui.SetCursorScreenPos(x+width-27*scale,y)
-    if ui.Button(pane.minimized and "+##timerpaneexpand" or "-##timerpaneminimize",21*scale,0) then
-      minimize_timer(plugin,"group",pane)
+  if pane.title_bar~=false then
+    local x,y=ui.GetCursorScreenPos()
+    local width=ui.GetContentRegionAvail()
+    muted(#timers..(#timers==1 and " timer" or " timers"))
+    if not locked then
+      ui.SetCursorScreenPos(x+width-27*scale,y)
+      if ui.Button(pane.minimized and "+##timerpaneexpand" or "-##timerpaneminimize",21*scale,0) then
+        minimize_timer(plugin,"group",pane)
+      end
+      hint(pane.minimized and "Expand timer pane" or "Minimize timer pane")
     end
-    hint(pane.minimized and "Expand timer pane" or "Minimize timer pane")
   end
   if pane.minimized then return end
   local availw,availh=ui.GetContentRegionAvail()
@@ -935,9 +945,13 @@ local function timer_hud(plugin,id,title,geometry,locked,sw,sh,mouse_down,mouse_
       background_alpha=0
     end
     local title_color=C.title or C.notification or {0.08,0.09,0.11}
-    background_styles=push_color(ui.Col.TitleBg,title_color,background_alpha)
-      +push_color(ui.Col.TitleBgActive,C.titleActive or title_color,background_alpha)
-      +push_color(ui.Col.Border,C.border or title_color,background_alpha)
+    background_styles=push_color(ui.Col.Border,C.border or title_color,background_alpha)
+    if geometry.title_bar==false then
+      flags=flags+f.NoTitleBar
+    else
+      background_styles=background_styles+push_color(ui.Col.TitleBg,title_color,background_alpha)
+        +push_color(ui.Col.TitleBgActive,C.titleActive or title_color,background_alpha)
+    end
   else
     ui.PushStyleVar(ui.StyleVar.Alpha,opacity)
   end
@@ -972,7 +986,7 @@ local function draw_timer_hud(p,s,io)
   set_timer_profile(s.timer_profile)
   local active,shown={},{}
   local pane=s.timers_grouped and s.timer_group_layout
-  if s.in_zone then
+  if s.in_zone and not (pane and pane.minimized and pane.title_bar==false) then
     for _,timer in ipairs(s.timers or {}) do
       if timer.running or timer.finished then
         active[#active+1]=timer

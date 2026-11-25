@@ -4,6 +4,7 @@
 
 - Split grouped timer pane background opacity from each timer row's opacity. **Pane background opacity (%)** fades the background and title strip.
 - Add **Hide pane background** to make the grouped pane background and title strip fully transparent. Existing pane opacity values carry forward. Background hiding starts off.
+- Add **Hide pane title bar** to remove the grouped pane title and timer count, leaving the timer rows. Drag the pane by its body with the layout unlocked.
 - Add **Hide after finishing (seconds)** to auto-dismiss a finished bar after a per-timer delay. Finish alerts still fire, and the saved timer can be started again.
 
 ## 1.0.0-preview.6

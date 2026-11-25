@@ -11,6 +11,7 @@ local mouse_down,mouse_released=false,false
 local colorstack={}
 local varstack,window_bg_alpha,next_bg={}, {},nil
 local window_title_alpha,window_style_alpha,text_opacity={},{},{}
+local drawn_windows={}
 local clip_depth,child_flags=0,{}
 local function hit(label) if click==label and (not click_combo or current_combo==click_combo) then click=nil;return true end;return false end
 local constant_id=0
@@ -34,6 +35,7 @@ function ui.Begin(name,_,flags)
   if next_bg then window_bg_alpha[name]=next_bg;next_bg=nil end
   window_title_alpha[name]=color_alpha(ui.Col.TitleBg)
   window_style_alpha[name]=style_opacity()
+  drawn_windows[name]=true
   rects[name]=rect;draws[name]={};window_flags[name]=flags
   return true,true
 end
@@ -84,6 +86,7 @@ local function record(text)
 end
 function ui.Text(text) record(text) end
 function ui.TextWrapped(text) record(text) end
+function ui.TextDisabled(text) record(text) end
 function ui.TextColored(r,g,b,a,text) texts[text]=true;textcolors[text]={r,g,b,a};text_opacity[text]=style_opacity()*a end
 function ui.SetNextWindowSize(w,h) nextsize={w,h} end
 function ui.SetNextWindowPos(x,y) nextpos={x,y} end
@@ -94,7 +97,7 @@ function ui.DrawRectFilled(x1,y1,x2,y2,r,g,b,a)
   local window_draws=draws[current_window]
   window_draws[#window_draws+1]={x1,y1,x2,y2,r,g,b,a,style_opacity()}
 end
-for _,name in ipairs({'TextDisabled','Dummy','Separator','SetTooltip','SetNextItemWidth','SetWindowFontScale',
+for _,name in ipairs({'Dummy','Separator','SetTooltip','SetNextItemWidth','SetWindowFontScale',
  'DrawCircle','DrawLine','DrawCircleFilled','DrawRectGradient','SetCursorScreenPos',
  'SameLine','PushTextWrapPos','PopTextWrapPos','LabelText','PushID','PopID','BulletText',
  'SetNextWindowSizeConstraints'}) do ui[name]=function() end end
@@ -171,6 +174,7 @@ function p.timer_action(op,id)
   if op=='group' or op=='separate' then state.timers_grouped=op=='group';return {ok=true} end
   if op=='group_alpha' then state.timer_group_layout.alpha=id;return {ok=true} end
   if op=='group_background' then assert(type(id)=='boolean');state.timer_group_layout.background=id;return {ok=true} end
+  if op=='group_title' then assert(type(id)=='boolean');state.timer_group_layout.title_bar=id;return {ok=true} end
   local t=state.timers[1]
   assert(id==t.id)
   if op=='start' then t.remaining,t.run_duration,t.running,t.finished=t.duration,t.duration,true,false end
@@ -189,7 +193,7 @@ eq={Plugin=function() return p end}
 assert(loadfile(arg[1] or 'ui/modern/sentinel.lua'))()
 local frames=0
 local function frame(button,combo)
-  labels={};fields={};texts={};text_opacity={};click=button;click_combo=combo;windows.Sentinel();windows['Sentinel overlay']()
+  labels={};fields={};texts={};text_opacity={};drawn_windows={};click=button;click_combo=combo;windows.Sentinel();windows['Sentinel overlay']()
   assert(colors==0,'leaked colors '..colors);assert(vars==0,'leaked styles '..vars);assert(depth==0,'leaked windows '..depth)
   assert(clip_depth==0,'leaked clips '..clip_depth)
   if button then assert(click==nil,'button not reached: '..button) end
@@ -310,13 +314,26 @@ assert(state.timer_group_layout.background==false and window_bg_alpha[group_hud]
   'hide removes both pane backgrounds')
 assert(window_flags[group_hud]==shown_flags+ui.WindowFlags.NoBackground,'hidden pane uses a background-free window')
 check_group_content()
+assert(texts['2 timers'],'the pane shows a count by default')
+frame('Hide pane title bar')
+assert(state.timer_group_layout.title_bar==false and window_flags[group_hud]==shown_flags+ui.WindowFlags.NoBackground+ui.WindowFlags.NoTitleBar,
+  'title and background can both be disabled')
+assert(not texts['2 timers'],'titleless panes omit the count')
+check_group_content()
+frame('Minimize pane')
+assert(state.timer_group_layout.minimized and not drawn_windows[group_hud],'minimizing titleless mode hides the pane')
+frame('Expand pane')
+assert(drawn_windows[group_hud] and not texts['2 timers'],'the manager restores the pane in titleless mode')
 frame('Hide pane background')
-assert(state.timer_group_layout.background==true and window_bg_alpha[group_hud]==.96*.55 and window_flags[group_hud]==shown_flags,
-  'show restores the previous background opacity')
+assert(state.timer_group_layout.background==true and window_bg_alpha[group_hud]==.96*.55 and
+  window_flags[group_hud]==shown_flags+ui.WindowFlags.NoTitleBar,'background is independent of the title setting')
 mouse_down=true;rects[group_hud]={400,275,360,420};frame()
 mouse_down,mouse_released=false,true;frame();mouse_released=false
 local group_layout=layouts[#layouts]
-assert(group_layout[6]=='group' and group_layout[3]==360 and group_layout[4]==420,'pane drag and resize persist only the group layout')
+assert(group_layout[6]=='group' and group_layout[3]==360 and group_layout[4]==420,'titleless pane drag and resize still persist group geometry')
+frame('Hide pane title bar')
+assert(state.timer_group_layout.title_bar==true and texts['2 timers'] and window_flags[group_hud]==shown_flags,
+  'show restores the native title and count')
 frame('-##timerpaneminimize');frame()
 assert(state.timer_group_layout.minimized and rects[group_hud][4]==52 and #draws[group_hud]==0)
 frame('Lock timer bars');frame('Expand pane')
