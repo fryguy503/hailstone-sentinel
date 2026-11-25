@@ -1,11 +1,11 @@
 hailstone-addon 1
 name sentinel
 kind plugin
-version 1.0.0-preview.6
+version 1.0.0-preview.7
 author Fryguy
 description Personal alerts for health, buffs, combat and chat.
 min_client 0.7.0-beta
 caps read,commands,events,ui
-package linux-x64 461462 b183c5287b434d1b98a35bf1b1c72e6c747e97f2be344aecc60b8b397dda4031 https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.6/sentinel-1.0.0-preview.6-linux-x64.zip
-package macos-arm64 340985 0701d03175326da03362351f870f0472472e6eac24b94df977952a43e6049e9c https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.6/sentinel-1.0.0-preview.6-macos-arm64.zip
-package windows-x64 406183 b3dd5354a934f776d034a8d129c82c6ac601fca0f3a033f4fe0995b2444cec35 https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.6/sentinel-1.0.0-preview.6-windows-x64.zip
+package linux-x64 465260 c5921638f5def3fca8c63209c5fc9299ae11a51a3de894f9a936cec3a37c452f https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.7/sentinel-1.0.0-preview.7-linux-x64.zip
+package macos-arm64 343957 786505a5cfbd9399be081d5f9b048eb5ad8d09652242999d726b106282fd5293 https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.7/sentinel-1.0.0-preview.7-macos-arm64.zip
+package windows-x64 408562 cd91e5d1885146918849c6925ea19ed5dc65dd342c7d26ff0e81708c365699e1 https://github.com/fryguy503/hailstone-sentinel/releases/download/v1.0.0-preview.7/sentinel-1.0.0-preview.7-windows-x64.zip
