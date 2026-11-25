@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-preview.6
+
+- Add **Timer bars** to Modern and Gamepad. Save up to 24 named timers per character, each lasting 1 to 86,400 seconds, and start, restart, or stop them manually.
+- Move, resize, and minimize individual countdown overlays or group them in one movable, resizable, collapsible pane. Lock the overlays to let game clicks pass through.
+- Choose a starting color and optional warning and critical colors based on seconds remaining. Adjust each timer's opacity and the grouped pane's opacity from 10% to 100%.
+- Add **Start or restart a timer** as an alert result, with support for timer-only rules and combinations with the existing outputs.
+- Add **A timer bar reaches its threshold** as an alert event. Set the seconds remaining to `0` to alert when the selected timer ends.
+- Save timer definitions and layout mode per server and character, with separate position and size settings for individual bars and the grouped pane. Active countdowns continue across zoning and Master Pause, and reset when switching characters or reloading Sentinel. Master Pause suppresses automatic rules, including their timer starts.
+- Clear timer selections on imports for re-selection, disable linked rules when a timer is deleted, and reject timer rule loops.
+
 ## 1.0.0-preview.5
 
 - Add **I receive a buff** and **I receive a debuff** events, with an optional exact spell-name filter and starter presets.

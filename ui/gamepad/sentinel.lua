@@ -42,6 +42,8 @@ local share_in, share_out, inspected, delete_id = "", "", nil, nil
 local preset_search, preset_category, preset_selected = "", "All categories", nil
 local overlay_dragged = false
 local overlay_height,overlay_signature
+local timer_draft, timer_remove, timer_profile, timer_group_alpha_draft
+local timer_layouts = {}
 
 local function copy(t)
   local r = {}; for k,v in pairs(t or {}) do r[k] = type(v)=="table" and copy(v) or v end; return r
@@ -67,6 +69,9 @@ end
 local function label(list,id)
   for _,v in ipairs(list) do if (v.id or v[1])==id then return v.label or v[2] end end
   return tostring(id or "Choose one")
+end
+local function visible_label(value)
+  return value:gsub("#+",function(marks) return ("# "):rep(#marks):sub(1,-2) end)
 end
 local function result(r,success)
   if r and r.ok then notice,notice_bad = success or "Saved.",false; return true end
@@ -180,7 +185,44 @@ local function number(v)
   local n=tonumber(v)
   return n and string.format("%g",n) or tostring(v or 0)
 end
+local function timer_event(event)
+  return event=="timer_remaining"
+end
+local function find_timer(id)
+  for _,timer in ipairs(st.timers or {}) do if timer.id==id then return timer end end
+end
+local function timer_reference(id)
+  local timer=find_timer(id)
+  if timer then return '"'..timer.name..'"' end
+  if id=="unassigned-timer" then return "(choose a timer again)" end
+  return (id and id~="") and "(missing timer)" or "(choose a timer)"
+end
+local function unlinked_timer(id)
+  return id and id~="" and not find_timer(id)
+end
+local function timer_picker(label_id,id,empty_label)
+  local list={{"",empty_label}}
+  local counts={}
+  for _,timer in ipairs(st.timers or {}) do counts[timer.name]=(counts[timer.name] or 0)+1 end
+  for _,timer in ipairs(st.timers or {}) do
+    local title=visible_label(timer.name).." ("..timer.duration.."s)"
+    if counts[timer.name]>1 then title=title.." · "..timer.id end
+    list[#list+1]={timer.id,title}
+  end
+  if unlinked_timer(id) then list[#list+1]={id,id=="unassigned-timer" and "Choose a timer again" or "Missing timer"} end
+  return combo(label_id,list,id or "")
+end
+local function missing_rule_timer(a)
+  return (timer_event(a.event) and not find_timer(a.subject)) or
+    unlinked_timer(a.timer_id)
+end
 local function description(a)
+  if timer_event(a.event) then
+    local prefix="Timer "..timer_reference(a.subject)
+    local seconds=tonumber(a.threshold) or 0
+    if seconds==0 then return prefix.." finishes" end
+    return prefix.." reaches "..number(seconds).." seconds remaining"
+  end
   local e=event_for(a.event)
   local s=e.label or tostring(a.event)
   if a.subject and a.subject~="" then s=s..' "'..a.subject..'"' end
@@ -196,7 +238,13 @@ local function sentence(a)
   if a.chat then outs[#outs+1]="a chat message" end
   if a.sound then outs[#outs+1]="a sound" end
   if a.speech then outs[#outs+1]="spoken words" end
-  return "When "..description(a):lower()..", notify me with "..(#outs>0 and table.concat(outs,", ") or "no outputs selected").."."
+  local effects={}
+  if a.timer_id and a.timer_id~="" then effects[#effects+1]="start or restart timer "..timer_reference(a.timer_id) end
+  if #outs>0 then effects[#effects+1]="notify me with "..table.concat(outs,", ") end
+  if #effects==0 then effects[1]="no results are selected" end
+  local condition=description(a)
+  if timer_event(a.event) then condition=condition:gsub("^Timer","timer") else condition=condition:lower() end
+  return "When "..condition..", "..table.concat(effects," and ").."."
 end
 
 local function editor()
@@ -210,12 +258,22 @@ local function editor()
   end
   ui.SameLine()
   if ui.Button("Preview") then result(P.preview(draft),"Preview sent. Test alerts are marked in Activity.") end
+  if draft.timer_id and draft.timer_id~="" then hint("Shows a sample countdown if the result timer is idle.") end
   field("Alert name"); draft.name=textfield("##name",draft.name,"Give this alert a memorable name",160)
   section(1,"WHEN SHOULD SENTINEL NOTIFY YOU?")
-  field("Event"); draft.event=combo("##event",st.catalog or {},draft.event)
+  field("Event")
+  local prior_event=draft.event
+  draft.event=combo("##event",st.catalog or {},prior_event)
+  if timer_event(draft.event)~=timer_event(prior_event) then
+    draft.subject=""
+    if timer_event(draft.event) then draft.threshold=0 end
+  end
   e=event_for(draft.event)
   ui.PushTextWrapPos(0); muted(e.help or ""); ui.PopTextWrapPos()
-  if e.subject_label and e.subject_label~="" then
+  if timer_event(draft.event) then
+    field("Timer bar")
+    draft.subject=timer_picker("##eventtimer",draft.subject,"Choose a timer")
+  elseif e.subject_label and e.subject_label~="" then
     field(e.subject_label); draft.subject=textfield("##subject",draft.subject,"Enter a name or text to watch",512)
   end
   if e.threshold_label and e.threshold_label~="" then
@@ -223,17 +281,29 @@ local function editor()
     ui.SetNextItemWidth(-1)
     local text=ui.InputText("##threshold",tostring(draft.threshold or 0),12,ui.InputTextFlags.CharsDecimal)
     draft.threshold=tonumber(text) or draft.threshold
+    if draft.event=="timer_remaining" then muted("Use 0 to trigger when the timer finishes.") end
   end
   field("Cooldown between notifications (seconds)")
   ui.SetNextItemWidth(-1); draft.cooldown=ui.SliderInt("##cooldown",math.floor(draft.cooldown or 10),0,300,tostring(draft.cooldown or 10).." seconds")
   hint("A condition alerts when it becomes true. Cooldown limits repeated events. It does not create a repeating alarm.")
-  section(2,"HOW SHOULD IT REACH YOU?")
+  section(2,"WHAT SHOULD SENTINEL DO?")
   draft.overlay=check("On-screen banner",draft.overlay); ui.SameLine(); draft.chat=check("Chat message",draft.chat)
   draft.sound=check("Play a sound",draft.sound); ui.SameLine(); draft.speech=check("Speak the message",draft.speech)
-  field("Message (leave empty for a helpful automatic message)")
-  draft.message=textfield("##message",draft.message,"For example: Heal {C} now!",1024)
-  muted("Tokens: {C} your name  /  {L} matched text  /  {COUNTER} times fired")
-  muted("Chat patterns can also insert captures such as {S1} and {N1}.")
+  field("Start or restart a timer")
+  draft.timer_id=timer_picker("##resulttimer",draft.timer_id,"No timer started")
+  if unlinked_timer(draft.timer_id) or (timer_event(draft.event) and unlinked_timer(draft.subject)) then
+    tint(C.warning,"Choose an existing timer to replace the missing link.")
+  end
+  if #(st.timers or {})==0 then
+    muted("Create a timer in Timer bars to use it here.")
+    if ui.SmallButton("Open Timer bars") then tab="timers" end
+  end
+  if draft.overlay or draft.chat or draft.sound or draft.speech then
+    field("Message (leave empty for a helpful automatic message)")
+    draft.message=textfield("##message",draft.message,"For example: Heal {C} now!",1024)
+    muted("Tokens: {C} your name  /  {L} matched text  /  {COUNTER} times fired")
+    muted("Chat patterns can also insert captures such as {S1} and {N1}.")
+  end
   if draft.overlay then
     field("Banner color"); draft.color=combo("##color",COLORS,draft.color)
     field("Banner size"); draft.size=combo("##size",SIZES,draft.size or 2)
@@ -340,10 +410,14 @@ local function details(a)
   heading("ALERT DETAILS",a.name or "Untitled",a.enabled and "This rule is enabled." or "This rule is paused.")
   if primary("Edit alert") then newdraft(a); return end
   ui.SameLine(); if ui.Button("Preview") then act("test",a.id,"Preview sent.") end
+  if a.timer_id and a.timer_id~="" then hint("Shows a sample countdown if the result timer is idle.") end
   ui.SameLine(); if ui.Button(a.enabled and "Pause rule" or "Enable rule") then act("toggle_alert",a.id,"Rule updated.") end
   gap(16); tint(C.accent,"WHEN"); ui.TextWrapped(description(a)); gap(5)
   ui.TextWrapped(event_for(a.event).help or "")
   gap(14); tint(C.accent,"THEN"); ui.TextWrapped(sentence(a))
+  if missing_rule_timer(a) then
+    gap(5); tint(C.warning,"Edit the alert to choose a timer. You can create one in Timer bars.")
+  end
   if a.message and a.message~="" then gap(8);ui.TextWrapped(a.message) end
   gap(14); line(); gap(6)
   local function detail(k,v) muted(k);ui.SameLine(125*scale);ui.Text(v) end
@@ -464,13 +538,178 @@ local function sharing()
   ui.SameLine(); if ui.Button("Clear text") then share_in=""; inspected=nil end
   if inspected and inspected.ok then
     gap(10); tint(C.accent,tostring(#(inspected.alerts or {})).." alerts ready for review")
-    for _,a in ipairs(inspected.alerts or {}) do ui.BulletText((a.name or "Untitled").."  /  "..description(a)) end
+    local has_timers=false
+    for _,a in ipairs(inspected.alerts or {}) do
+      ui.BulletText((a.name or "Untitled").."  /  "..description(a))
+      has_timers=has_timers or timer_event(a.event) or (a.timer_id and a.timer_id~="")
+    end
     gap(5); ui.TextWrapped("These rules will be added as separate, paused alerts. Enable the ones you want after reviewing their settings.")
+    if has_timers then ui.TextWrapped("Check timer conditions and results in the alert editor before enabling imported rules.") end
     gap(5)
     if primary("Add reviewed alerts (paused)",260) then
       local r=P.import(share_in)
       if result(r,tostring(r and r.count or 0).." alerts imported, paused and ready to review.") then inspected=nil; share_in="" end
     end
+  end
+end
+
+local function timer_clock(seconds)
+  local n=math.max(0,math.ceil(seconds or 0))
+  if n>=3600 then return string.format("%d:%02d:%02d",n//3600,n//60%60,n%60) end
+  return string.format("%d:%02d",n//60,n%60)
+end
+local function timer_color(timer)
+  local remaining=timer.remaining or 0
+  if timer.running or timer.finished then
+    if timer.critical_at>0 and remaining<=timer.critical_at then return color(timer.critical_color) end
+    if timer.warning_at>0 and remaining<=timer.warning_at then return color(timer.warning_color) end
+  end
+  return color(timer.color)
+end
+local function timer_status(timer)
+  if timer.running then return timer_clock(timer.remaining).." left" end
+  if timer.finished then return "Done" end
+  return "Ready"
+end
+local function set_timer_profile(profile)
+  if profile and profile~="" and timer_profile~=profile then
+    timer_profile=profile
+    timer_draft,timer_remove,timer_group_alpha_draft=nil,nil,nil
+    timer_layouts={}
+    if draft and (timer_event(draft.event) or (draft.timer_id and draft.timer_id~="")) then
+      draft,selected=nil,nil
+    end
+  end
+end
+local function timer_action(op,id,message)
+  return result(P.timer_action(op,id or ""),message)
+end
+local function minimize_timer(plugin,id,layout)
+  local label=id=="group" and "Timer pane" or "Timer"
+  return result(plugin.timer_layout(id,layout.x,layout.y,layout.width,layout.height,not layout.minimized),
+    label..(layout.minimized and " expanded." or " minimized."))
+end
+local function edit_timer(timer)
+  timer_draft=timer and copy(timer) or {name="",duration=60,color="cyan",alpha=100,warning_at=0,warning_color="yellow",
+    critical_at=0,critical_color="red"}
+  for _,key in ipairs({"duration","warning_at","critical_at"}) do timer_draft[key]=tostring(timer_draft[key]) end
+  timer_remove=nil
+end
+local function save_timer(start)
+  local d=timer_draft
+  local name=d.name:match("^%s*(.-)%s*$")
+  local duration=math.tointeger(tonumber(d.duration))
+  local warning=math.tointeger(tonumber(d.warning_at))
+  local critical=math.tointeger(tonumber(d.critical_at))
+  local message
+  if name=="" then message="Enter a name for this timer."
+  elseif not duration or duration<1 or duration>86400 then message="Duration must be a whole number from 1 to 86,400 seconds."
+  elseif not warning or not critical or warning<0 or critical<0 or warning>duration or critical>duration then
+    message="Enter whole seconds between 0 and the duration for each color threshold."
+  elseif warning>0 and critical>=warning then message="Critical must have fewer seconds remaining than warning." end
+  if message then result({ok=false,error=message});return end
+  local saved=P.timer_save({id=d.id,name=name,duration=duration,color=d.color,alpha=d.alpha,warning_at=warning,
+    warning_color=d.warning_color,critical_at=critical,critical_color=d.critical_color})
+  if result(saved,"Timer saved.") then
+    timer_draft=nil
+    if start then timer_action("start",saved.id or d.id,"Timer started.") end
+  end
+end
+local function timer_editor()
+  local d=timer_draft
+  heading("",d.id and "Edit timer" or "New timer")
+  field("Name")
+  d.name=textfield("##timername",d.name,"Example: Lesson refresh",81)
+  field("Duration in seconds")
+  d.duration=textfield("##timerduration",d.duration,"1 to 86400",32,145*scale)
+  field("Starting color")
+  d.color=combo("##timercolor",COLORS,d.color,208*scale)
+  field("Opacity (%)")
+  ui.SetNextItemWidth(208*scale)
+  d.alpha=ui.SliderInt("##timeropacity",d.alpha or 100,10,100)
+  gap(9)
+  ui.TextWrapped("Set a color change in seconds remaining. Enter 0 to turn it off.")
+  for _,condition in ipairs({{"warning","Warning"},{"critical","Critical"}}) do
+    local key,title=condition[1],condition[2]
+    field(title.." seconds remaining")
+    d[key.."_at"]=textfield("##timer"..key,d[key.."_at"],"0 to disable",32,145*scale)
+    ui.SameLine()
+    d[key.."_color"]=combo("##timer"..key.."color",COLORS,d[key.."_color"],150*scale)
+  end
+  gap(12)
+  if primary(d.id and "Save changes" or "Save timer") then save_timer(false) end
+  if not d.id then
+    ui.SameLine();if primary("Save & start") then save_timer(true) end
+  end
+  ui.SameLine();if ui.Button("Cancel timer edits") then timer_draft=nil;notice="" end
+end
+local function timers()
+  if not st.in_zone then
+    ui.TextWrapped("Enter the world to manage this character's timers.")
+    return
+  end
+  if timer_draft then timer_editor();return end
+  if primary("+ New timer") then edit_timer() end
+  ui.SameLine()
+  local locked=st.timers_locked==true
+  local next_locked=check("Lock timer bars",locked)
+  if next_locked~=locked then timer_action(next_locked and "lock" or "unlock",nil,next_locked and "Timer bars locked." or "Timer bars unlocked.") end
+  ui.SameLine()
+  local grouped=st.timers_grouped==true
+  local next_grouped=check("Group timer bars",grouped)
+  if next_grouped~=grouped and timer_action(next_grouped and "group" or "separate",nil,
+      next_grouped and "Showing a single timer pane." or "Showing separate timer bars.") then
+    timer_group_alpha_draft=nil
+  end
+  gap(4)
+  if locked then
+    ui.TextWrapped("Locked bars let clicks pass through. Unlock to move or resize them.")
+  else
+    ui.TextWrapped(grouped and "Drag the timer pane by its title. Resize from the lower-right corner."
+      or "Drag a running bar by its title. Resize from the lower-right corner.")
+  end
+  if grouped and st.timer_group_layout then
+    local pane=st.timer_group_layout
+    if ui.Button(pane.minimized and "Expand pane" or "Minimize pane") then minimize_timer(P,"group",pane) end
+    field("Pane opacity (%)")
+    ui.SetNextItemWidth(185*scale)
+    local alpha,changed=ui.SliderInt("##timerpaneopacity",timer_group_alpha_draft or pane.alpha or 100,10,100)
+    if changed then timer_group_alpha_draft=alpha end
+    if timer_group_alpha_draft then
+      ui.SameLine();if ui.Button("Apply pane opacity") and timer_action("group_alpha",alpha,"Timer pane opacity saved.") then
+        timer_group_alpha_draft=nil
+      end
+    end
+  end
+  if #(st.timers or {})==0 then
+    gap(12)
+    ui.TextWrapped("Create a timer and start it when you're ready for the countdown.")
+  end
+  for _,t in ipairs(st.timers or {}) do
+    ui.PushID(t.id)
+    gap(6);line();gap(3)
+    tint(C.heading,t.name)
+    muted(timer_clock(t.duration).." duration  /  "..timer_status(t)..(t.minimized and "  /  Minimized" or ""))
+    if timer_remove==t.id then
+      ui.TextWrapped("Remove this timer and its saved layout?")
+      for _,alert in ipairs(st.alerts or {}) do
+        if alert.timer_id==t.id or (timer_event(alert.event) and alert.subject==t.id) then
+          muted("Alerts linked to this timer will be paused.")
+          break
+        end
+      end
+      if ui.Button("Confirm removal") and timer_action("delete",t.id,"Timer removed.") then timer_remove=nil end
+      ui.SameLine();if ui.Button("Keep timer") then timer_remove=nil end
+    else
+      if ui.Button(t.running and "Restart" or "Start") then timer_action("start",t.id,"Timer started.") end
+      if t.running or t.finished then
+        ui.SameLine();if ui.Button(t.running and "Stop" or "Dismiss") then timer_action("stop",t.id,"Timer cleared.") end
+      end
+      ui.SameLine();if ui.Button("Edit timer") then edit_timer(t) end
+      ui.SameLine();if ui.Button(t.minimized and "Expand" or "Minimize") then minimize_timer(P,t.id,t) end
+      ui.SameLine();if ui.Button("Remove timer") then timer_remove=t.id end
+    end
+    ui.PopID()
   end
 end
 
@@ -512,10 +751,12 @@ local function settings()
   gap(16); muted("SENTINEL  /  Crafted for Hailstone")
 end
 
-local TABS={{"library","My alerts"},{"presets","Starter kits"},{"activity","Activity"},{"sharing","Share & import"},{"settings","Settings & help"}}
+local TABS={{"library","My alerts"},{"presets","Starter kits"},{"timers","Timer bars"},{"activity","Activity"},{"sharing","Share & import"},{"settings","Settings & help"}}
 ui.window("Sentinel",function()
   P=eq.Plugin("sentinel"); if not P then return end
-  st=P.state(); if not st or not st.open then return end
+  st=P.state(); if not st then return end
+  set_timer_profile(st.timer_profile)
+  if not st.open then return end
   local nc,nv=setstyles()
   local io=ui.GetIO()
   ui.SetNextWindowSize(math.min(900*scale,math.max(540,(io.width or 1280)-60)),math.min(660*scale,math.max(400,(io.height or 900)-70)),ui.Cond.FirstUseEver)
@@ -524,9 +765,10 @@ ui.window("Sentinel",function()
   if visible then
     header()
     local avail=ui.GetContentRegionAvail()
-    local bw=math.max(82*scale,math.floor((avail-28*scale)/5))
+    local columns=avail>=700*scale and #TABS or 3
+    local bw=math.max(1,math.floor((avail-(columns-1)*7*scale)/columns))
     for i,v in ipairs(TABS) do
-      if i>1 then ui.SameLine() end
+      if (i-1)%columns~=0 then ui.SameLine() end
       local chosen=tab==v[1]
       local pushed=chosen and (push_color(ui.Col.Button,C.active)+push_color(ui.Col.Text,C.accent)) or 0
       if ui.Button(v[2],bw,27*scale) then tab=v[1] end
@@ -537,6 +779,7 @@ ui.window("Sentinel",function()
     ui.BeginChild("##sentinelbody",0,math.max(100,h-42*scale),false)
     if tab=="library" then library()
     elseif tab=="presets" then presets()
+    elseif tab=="timers" then timers()
     elseif tab=="activity" then activity()
     elseif tab=="sharing" then sharing()
     else settings() end
@@ -554,14 +797,187 @@ ui.window("Sentinel",function()
   ui.End(); clearstyles(nc,nv)
 end)
 
--- A separate, input-free HUD while locked. Unlocking reveals a movable placeholder,
--- so its position can be adjusted even when no real alert is currently visible.
-ui.window("Sentinel overlay",function()
-  local p=eq.Plugin("sentinel"); if not p then return end
-  local s=p.state(); if not s then return end
+local function clamp(value,low,high)
+  return math.max(low,math.min(high,value))
+end
+local function timer_alpha(layout)
+  return (layout.alpha or 100)/100
+end
+local function timer_track(timer,x,y,width,height)
+  local ac=timer_color(timer)
+  local track=C.notificationText or C.text or {1,1,1}
+  local fraction=clamp((timer.remaining or 0)/math.max(1,timer.run_duration or timer.duration),0,1)
+  local fill=math.min(width,math.max(2*scale,width*fraction))
+  local radius=math.min(3*scale,height/2)
+  ui.DrawRectFilled(x,y,x+width,y+height,track[1],track[2],track[3],0.17,radius)
+  ui.DrawRectFilled(x,y,x+fill,y+height,ac[1],ac[2],ac[3],0.96,radius)
+end
+local function timer_hud_contents(plugin,timer,_,locked)
+  local time=timer.finished and "Done" or timer_clock(timer.remaining)
+  local x,y=ui.GetCursorScreenPos()
+  local width,height=ui.GetContentRegionAvail()
+  if not locked and not timer.minimized then width=math.max(1,width-6*scale) end
+  local clock_width,clock_height=ui.CalcTextSize(time)
+  local button_width=not locked and 21*scale or 0
+  local button_space=button_width>0 and button_width+5*scale or 0
+  local clock_x=x+width-clock_width-button_space
+  if timer.minimized then
+    local ac=timer_color(timer)
+    ui.DrawRectFilled(x,y,x+3*scale,y+height,ac[1],ac[2],ac[3],1,1)
+    clock_x=x+10*scale
+  else
+    local track_width=math.max(1,clock_x-x-8*scale)
+    local track_height=math.max(1,height*0.62)
+    local track_y=y+(height-track_height)/2
+    timer_track(timer,x,track_y,track_width,track_height)
+  end
+  ui.SetCursorScreenPos(clock_x,y+math.max(0,(height-clock_height)/2))
+  tint(C.notificationText,time)
+  if not locked then
+    local button_height=math.min(height,clock_height+5*scale)
+    ui.SetCursorScreenPos(x+width-button_width,y+(height-button_height)/2)
+    if ui.Button(timer.minimized and "+##timerexpand" or "-##timerminimize",button_width,button_height) then
+      minimize_timer(plugin,timer.id,timer)
+    end
+    hint(timer.minimized and "Expand timer bar" or "Minimize timer bar")
+  end
+end
+local function group_hud_contents(plugin,timers,pane,locked)
+  local x,y=ui.GetCursorScreenPos()
+  local width=ui.GetContentRegionAvail()
+  muted(#timers..(#timers==1 and " timer" or " timers"))
+  if not locked then
+    ui.SetCursorScreenPos(x+width-27*scale,y)
+    if ui.Button(pane.minimized and "+##timerpaneexpand" or "-##timerpaneminimize",21*scale,0) then
+      minimize_timer(plugin,"group",pane)
+    end
+    hint(pane.minimized and "Expand timer pane" or "Minimize timer pane")
+  end
+  if pane.minimized then return end
+  local availw,availh=ui.GetContentRegionAvail()
+  local gutter=locked and 0 or 6*scale
+  local child_flags=ui.WindowFlags.NoBackground+(locked and ui.WindowFlags.NoInputs or 0)
+  if ui.BeginChild("##timergrouplist",math.max(1,availw-gutter),math.max(1,availh-gutter),false,child_flags) then
+    local opacity=timer_alpha(pane)
+    for i,timer in ipairs(timers) do
+      ui.PushStyleVar(ui.StyleVar.Alpha,timer_alpha(timer)*opacity)
+      local time=timer.finished and "Done" or timer_clock(timer.remaining)
+      local rx,ry=ui.GetCursorScreenPos()
+      local rw=ui.GetContentRegionAvail()
+      local tw,th=ui.CalcTextSize(time)
+      local name_x=rx
+      if timer.minimized then
+        local ac=timer_color(timer)
+        ui.DrawRectFilled(rx,ry,rx+3*scale,ry+th,ac[1],ac[2],ac[3],1,1)
+        name_x=rx+9*scale
+        ui.SetCursorScreenPos(name_x,ry)
+      end
+      ui.PushClipRect(name_x,ry,math.max(name_x,rx+rw-tw-8*scale),ry+th,true)
+      tint(C.notificationText,timer.name)
+      ui.PopClipRect()
+      ui.SetCursorScreenPos(rx+math.max(0,rw-tw),ry)
+      tint(C.notificationText,time)
+      if not timer.minimized then
+        local bx,by=ui.GetCursorScreenPos()
+        timer_track(timer,bx,by,math.max(1,rw),7*scale)
+        ui.Dummy(0,7*scale)
+      end
+      ui.PopStyleVar()
+      if i<#timers then gap(6) end
+    end
+  end
+  ui.EndChild()
+end
+local function timer_hud(plugin,id,title,geometry,locked,sw,sh,mouse_down,mouse_released,contents,data)
+  local saved_w,saved_h=geometry.width,geometry.height
+  local minimized=geometry.minimized
+  local height_low,height_high=54,300
+  if id=="group" then height_low,height_high=80,1000 end
+  local minw,minh=math.min(160*scale,sw),math.min(height_low*scale,sh)
+  local maxw,maxh=math.min(1000*scale,sw),math.min(height_high*scale,sh)
+  local w,h=clamp(saved_w*scale,minw,maxw),clamp(saved_h*scale,minh,maxh)
+  if minimized then w,h=math.min(w,192*scale),math.min(52*scale,sh) end
+  local posx,posy=clamp(geometry.x*sw,0,sw-w),clamp(geometry.y*sh,0,sh-h)
+  local key=table.concat({posx,posy,w,h,sw,sh,scale,tostring(minimized),tostring(locked)},":")
+  local layout=timer_layouts[id] or {}
+  local apply=layout.key~=key
+  if apply then
+    ui.SetNextWindowPos(posx,posy,ui.Cond.Always)
+    ui.SetNextWindowSize(w,h,ui.Cond.Always)
+    layout={key=key}
+  end
+  local f=ui.WindowFlags
+  local flags=f.NoCollapse+f.NoSavedSettings+f.NoScrollbar+f.NoScrollWithMouse+f.NoFocusOnAppearing+f.NoBringToFrontOnFocus
+  if locked then flags=flags+f.NoInputs+f.NoMove end
+  if locked or minimized then flags=flags+f.NoResize
+  elseif ui.SetNextWindowSizeConstraints then ui.SetNextWindowSizeConstraints(minw,minh,maxw,maxh) end
+  local opacity=timer_alpha(geometry)
+  ui.PushStyleVar(ui.StyleVar.Alpha,opacity)
+  ui.SetNextWindowBgAlpha(0.96*opacity)
+  -- ### lets the name change without changing the ImGui ID for this timer.
+  local visible=ui.Begin(visible_label(title).."###SentinelTimer-"..id,nil,flags)
+  if visible then
+    local actual_x,actual_y=ui.GetWindowPos()
+    local actual_w,actual_h=ui.GetWindowSize()
+    if not apply and not locked and layout.x and (mouse_down or mouse_released) then
+      layout.moved=layout.moved or math.abs(actual_x-layout.x)>.5 or math.abs(actual_y-layout.y)>.5
+      layout.widened=layout.widened or math.abs(actual_w-layout.w)>.5
+      layout.height_changed=layout.height_changed or math.abs(actual_h-layout.h)>.5
+    end
+    if not mouse_down and (layout.moved or layout.widened or layout.height_changed) then
+      local x=clamp(actual_x,0,math.max(0,sw-actual_w))/sw
+      local y=clamp(actual_y,0,math.max(0,sh-actual_h))/sh
+      local width=layout.widened and not minimized and clamp(actual_w/scale,160,1000) or saved_w
+      local height=layout.height_changed and not minimized and clamp(actual_h/scale,height_low,height_high) or saved_h
+      result(plugin.timer_layout(id,x,y,width,height,minimized),"Timer layout saved.")
+      layout={}
+    end
+    layout.x,layout.y,layout.w,layout.h=actual_x,actual_y,actual_w,actual_h
+    timer_layouts[id]=layout
+    contents(plugin,data,geometry,locked)
+  end
+  ui.End()
+  ui.PopStyleVar()
+end
+local function draw_timer_hud(p,s,io)
+  set_timer_profile(s.timer_profile)
+  local active,shown={},{}
+  local pane=s.timers_grouped and s.timer_group_layout
+  if s.in_zone then
+    for _,timer in ipairs(s.timers or {}) do
+      if timer.running or timer.finished then
+        active[#active+1]=timer
+        shown[pane and "group" or timer.id]=true
+      end
+    end
+  end
+  for id in pairs(timer_layouts) do if not shown[id] then timer_layouts[id]=nil end end
+  if #active==0 or (io.width or 0)<1 or (io.height or 0)<1 then return end
+  local c,v=setstyles()
+  ui.PushStyleVar(ui.StyleVar.WindowPadding,8*scale,5*scale)
+  ui.PushStyleVar(ui.StyleVar.FramePadding,5*scale,3*scale)
+  local bg=push_color(ui.Col.WindowBg,C.notification,0.96)
+  local locked=s.timers_locked==true
+  local down,released=false,false
+  if not locked then down,released=ui.IsMouseDown(0),ui.IsMouseReleased(0) end
+  if pane then
+    timer_hud(p,"group","Sentinel timers",pane,locked,io.width,io.height,down,released,group_hud_contents,active)
+  else
+    for _,timer in ipairs(active) do
+      timer_hud(p,timer.id,timer.name,timer,locked,io.width,io.height,down,released,timer_hud_contents,timer)
+    end
+  end
+  if bg>0 then ui.PopStyleColor(bg) end
+  ui.PopStyleVar(2)
+  clearstyles(c,v)
+end
+
+-- A separate, input-free banner HUD while locked. Unlocking reveals a movable
+-- placeholder so the position can be adjusted without an active alert.
+local function draw_alert_hud(p,s,io)
   local overlays=s.overlays or {}; local locked=s.overlay_locked~=false
   if #overlays==0 and locked then return end
-  local io=ui.GetIO(); local sw,sh=io.width or 1280,io.height or 720
+  local sw,sh=io.width or 1280,io.height or 720
   local w=math.min(620,sw-32)
   local h=not locked and 32 or 0
   local signature=locked and "locked" or "unlocked"
@@ -622,4 +1038,12 @@ ui.window("Sentinel overlay",function()
   end
   ui.End();if notification_style>0 then ui.PopStyleColor(notification_style) end
   ui.PopStyleVar();clearstyles(c,v)
+end
+
+ui.window("Sentinel overlay",function()
+  local p=eq.Plugin("sentinel"); if not p then return end
+  local s=p.state(); if not s then return end
+  local io=ui.GetIO()
+  draw_timer_hud(p,s,io)
+  draw_alert_hud(p,s,io)
 end)

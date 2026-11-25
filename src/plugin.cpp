@@ -2,6 +2,7 @@
 #include "hailstone_plugin.h"
 #include "audio.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -11,8 +12,10 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
@@ -25,6 +28,8 @@ namespace {
 using namespace sentinel;
 namespace fs = std::filesystem;
 constexpr size_t max_alerts=128, max_bytes=128*1024, max_config_bytes=1024*1024;
+constexpr size_t max_timers = 24;
+constexpr auto unassigned_timer = "unassigned-timer";
 Engine engine;
 Snapshot snapshot;
 std::unique_ptr<Audio> audio;
@@ -32,6 +37,14 @@ fs::path folder;
 fs::path window_preferences;
 bool open=false, delivering=false, initialized=false, load_failed=false;
 uint64_t revision=0, last_poll=0, next_id=0;
+uint64_t timer_profile = 0, next_timer_id = 0;
+struct TimerRun {
+    uint64_t deadline;
+    int duration;
+    std::optional<uint64_t> previous_ms;
+    bool preview;
+};
+std::map<std::string, TimerRun> timer_runs;
 std::string status="Choose a starter preset or create your first alert.", error;
 std::string window_error;
 Json history=Json::array(), overlays=Json::array();
@@ -83,12 +96,91 @@ void presentation_defaults(Json& c) {
     }
     for(const auto* key:{"overlay_locked","quiet"})
         if(!c.contains(key)||!c[key].is_boolean())c[key]=std::string(key)=="overlay_locked";
+    c["timers"] = Json::array();
+    c["timers_locked"] = false;
+    c["timers_grouped"] = false;
+    c["timer_group_layout"] = {{"x", .63}, {"y", .17}, {"width", 320}, {"height", 220}, {"minimized", false}, {"alpha", 100}};
+}
+int timer_integer(const Json& field, int low, int high, const char* message) {
+    if (!field.is_number()) throw std::runtime_error(message);
+    const double number = field.get<double>();
+    if (!std::isfinite(number) || number < low || number > high || std::trunc(number) != number)
+        throw std::runtime_error(message);
+    return static_cast<int>(number);
+}
+int timer_alpha(const Json& field) {
+    return timer_integer(field, 10, 100, "Opacity must be a whole percent from 10 to 100.");
+}
+std::string timer_color(const Json& timer, const char* key) {
+    static constexpr std::array<std::string_view, 8> colors = {
+        "red", "orange", "yellow", "green", "cyan", "blue", "purple", "white"
+    };
+    const auto color = timer.at(key).get<std::string>();
+    if (std::find(colors.begin(), colors.end(), color) == colors.end())
+        throw std::runtime_error("Choose a timer color from the palette.");
+    return color;
+}
+Json timer_definition(const Json& raw) {
+    auto name = raw.value("name", std::string{});
+    const auto start = name.find_first_not_of(' ');
+    if (start == std::string::npos) throw std::runtime_error("Enter a timer name.");
+    name = name.substr(start, name.find_last_not_of(' ') - start + 1);
+    if (name.size() > 80 || std::any_of(name.begin(), name.end(), [](unsigned char ch) { return ch < 32 || ch == 127; }))
+        throw std::runtime_error("Use a timer name up to 80 bytes without control characters.");
+    const int duration = timer_integer(raw.at("duration"), 1, max_timer_seconds,
+        "Duration must be a whole number from 1 to 86400 seconds.");
+    const char* threshold_help = "Thresholds must be whole seconds from zero to the timer duration.";
+    const int warning = timer_integer(raw.at("warning_at"), 0, duration, threshold_help);
+    const int critical = timer_integer(raw.at("critical_at"), 0, duration, threshold_help);
+    if (warning && critical >= warning)
+        throw std::runtime_error("The critical threshold must be lower than the warning threshold.");
+    return {{"name", name}, {"duration", duration}, {"color", timer_color(raw, "color")},
+        {"warning_at", warning}, {"warning_color", timer_color(raw, "warning_color")},
+        {"critical_at", critical}, {"critical_color", timer_color(raw, "critical_color")},
+        {"alpha", timer_alpha(raw.value("alpha", Json(100)))}};
+}
+Json timer_geometry(const Json& x, const Json& y, const Json& width, const Json& height, const Json& minimized, bool grouped = false) {
+    auto coordinate = [](const Json& field, double low, double high) {
+        if (!field.is_number() || !std::isfinite(field.get<double>()))
+            throw std::runtime_error("Timer position and size must be finite numbers.");
+        return std::clamp(field.get<double>(), low, high);
+    };
+    if (!minimized.is_boolean()) throw std::runtime_error("Expected a timer minimize state.");
+    return {{"x", coordinate(x, 0, 1)}, {"y", coordinate(y, 0, 1)},
+        {"width", coordinate(width, 160, 1000)}, {"height", coordinate(height, grouped ? 80 : 54, grouped ? 1000 : 300)},
+        {"minimized", minimized}};
+}
+void load_timer_definitions(Json& config, const Json& raw) {
+    if (raw.contains("timers_locked")) config["timers_locked"] = raw.at("timers_locked").get<bool>();
+    if (raw.contains("timers_grouped")) config["timers_grouped"] = raw.at("timers_grouped").get<bool>();
+    if (raw.contains("timer_group_layout")) {
+        const auto& pane = raw.at("timer_group_layout");
+        config["timer_group_layout"] = timer_geometry(pane.at("x"), pane.at("y"), pane.at("width"), pane.at("height"), pane.at("minimized"), true);
+        config["timer_group_layout"]["alpha"] = timer_alpha(pane.value("alpha", Json(100)));
+    }
+    if (!raw.contains("timers")) return;
+    const auto& saved = raw.at("timers");
+    if (!saved.is_array() || saved.size() > max_timers) throw std::runtime_error("Invalid timer list.");
+    auto& timers = config["timers"];
+    for (const auto& item : saved) {
+        const auto id = item.at("id").get<std::string>();
+        if (!id.starts_with("timer-") || id.size() <= 6 || id.size() > 26 ||
+            id.find_first_not_of("0123456789", 6) != std::string::npos ||
+            std::any_of(timers.begin(), timers.end(), [&](const Json& timer) { return timer.at("id") == id; }))
+            throw std::runtime_error("Invalid or duplicate timer ID.");
+        auto timer = timer_definition(item);
+        timer.update(timer_geometry(item.at("x"), item.at("y"), item.at("width"), item.at("height"), item.at("minimized")));
+        timer["id"] = id;
+        timers.push_back(std::move(timer));
+    }
 }
 Json config_normalized(const Json& raw) {
     if(raw.contains("version")&&raw["version"]!=1)throw std::runtime_error("Unsupported settings version");
     auto c=normalize_config(raw);
     for(const auto* key:{"overlay_x","overlay_y","overlay_locked","quiet"})if(raw.contains(key))c[key]=raw[key];
-    presentation_defaults(c);return c;
+    presentation_defaults(c);
+    load_timer_definitions(c, raw);
+    return c;
 }
 void write_atomic(const fs::path& path,const std::string& text) {
     fs::create_directories(path.parent_path());
@@ -163,7 +255,7 @@ Json set_window_open(bool value) {
     return success();
 }
 bool persist() {
-    if(folder.empty()){error="Enter the world before saving character alerts.";return false;}
+    if(folder.empty()){error="Enter the world before saving character settings.";return false;}
     if(load_failed){error="Settings could not be read. Restore or rename config.json before saving; the original has been preserved.";return false;}
     try {
         const auto text=engine.config.dump(2);
@@ -178,7 +270,13 @@ template<typename Fn> Json change(Fn fn) {
     catch(const std::exception& ex){engine.config=previous;return failure(ex.what());}
 }
 void cancel_activity() {engine.reset();buff_types.clear();overlays.clear();if(audio)audio->cancel();}
+void select_timer_profile(const fs::path& next) {
+    if (next == folder) return;
+    timer_runs.clear();
+    ++timer_profile;
+}
 void load_for(const fs::path& next) {
+    select_timer_profile(next);
     cancel_activity();history.clear();folder=next;load_failed=false;error.clear();
     engine.config=defaults();presentation_defaults(engine.config);
     const auto path=folder/"config.json";
@@ -195,6 +293,10 @@ void load_for(const fs::path& next) {
         sounds=Audio::files(folder/"Sounds");
         status="Watching "+snapshot.character+". Settings save automatically.";
     }catch(const std::exception& ex){load_failed=true;error="Cannot read settings: "+std::string(ex.what());}
+    const auto& timers = engine.config.at("timers");
+    std::erase_if(timer_runs, [&](const auto& run) {
+        return std::none_of(timers.begin(), timers.end(), [&](const Json& timer) { return timer.at("id") == run.first; });
+    });
     ++revision;
 }
 void refresh_snapshot() {
@@ -291,9 +393,35 @@ void refresh_snapshot() {
             const auto next_folder=fs::path(std::u8string(path,path+n));
             if(changed_character||folder!=next_folder)load_for(next_folder);
         } else if(changed_character) {
+            select_timer_profile({});
             folder.clear();engine.config=defaults();presentation_defaults(engine.config);cancel_activity();
             history.clear();sounds.clear();status="Waiting for the character settings folder.";
         }
+    }
+}
+Json* find_timer(const std::string& id) {
+    auto& timers = engine.config["timers"];
+    const auto it = std::find_if(timers.begin(), timers.end(), [&](const Json& timer) { return timer.at("id") == id; });
+    return it == timers.end() ? nullptr : &*it;
+}
+void start_timer(const Json& timer, uint64_t now, bool preview = false) {
+    const auto& id = timer.at("id").get_ref<const std::string&>();
+    if (preview) {
+        const auto running = timer_runs.find(id);
+        if (running != timer_runs.end() && !running->second.preview && running->second.previous_ms != 0) return;
+    }
+    const int duration = timer.at("duration").get<int>();
+    timer_runs[id] = {now + static_cast<uint64_t>(duration) * 1000, duration, std::nullopt, preview};
+}
+void sample_timers(uint64_t now) {
+    if (!snapshot.in_zone) return;
+    for (auto& [id, run] : timer_runs) {
+        if (run.preview || run.previous_ms == 0) continue;
+        const auto* timer = find_timer(id);
+        if (!timer) continue;
+        const uint64_t remaining = run.deadline > now ? run.deadline - now : 0;
+        snapshot.timers.emplace(id, TimerReading{timer->at("name").get<std::string>(), remaining, run.previous_ms});
+        run.previous_ms = remaining;
     }
 }
 std::string clock_text() {
@@ -306,6 +434,11 @@ std::string clock_text() {
     std::ostringstream text;text<<std::put_time(&tm,"%H:%M:%S");return text.str();
 }
 void deliver(const Fired& f) {
+    if (snapshot.in_zone) {
+        if (const auto timer_id = f.alert.value("timer_id", std::string{}); !timer_id.empty()) {
+            if (const auto* timer = find_timer(timer_id)) start_timer(*timer, now_ms(), f.test);
+        }
+    }
     if(f.alert.value("chat",true))say((f.test?"Preview: ":"")+f.message);
     history.push_back({{"id",f.id},{"name",f.name},{"message",f.message},{"at",f.at},
         {"time",clock_text()},{"test",f.test},{"color",f.alert.value("color",std::string("cyan"))}});
@@ -327,16 +460,43 @@ Json* find(const std::string& id) {
     for(auto& a:engine.config["alerts"])if(a.value("id",std::string{})==id)return &a;
     return nullptr;
 }
+std::string timer_condition(const Json& rule) {
+    return rule.value("event", "") == "timer_remaining" ? rule.value("subject", std::string{}) : std::string{};
+}
+bool makes_timer_cycle(const Json& proposed, const std::string& source, const std::string& target) {
+    if (source.empty() || target.empty()) return false;
+    const auto edited_id = proposed.at("id");
+    std::set<std::string> seen{target};
+    std::vector<std::string> reachable{target};
+    for (size_t i = 0; i < reachable.size(); ++i) {
+        if (reachable[i] == source) return true;
+        for (const auto& rule : engine.config.at("alerts")) {
+            if (rule.at("id") == edited_id || !rule.value("enabled", true) || timer_condition(rule) != reachable[i]) continue;
+            const auto next = rule.value("timer_id", std::string{});
+            if (!next.empty() && seen.insert(next).second) reachable.push_back(next);
+        }
+    }
+    return false;
+}
 void validate_rule(const Json& a) {
     const auto event=a.value("event",std::string{}),subject=a.value("subject",std::string{});
     const bool required=event=="player_health_below"||event=="player_mana_below"||event=="buff_fading"||
         event=="buff_missing"||event=="spawn_appears"||event=="player_appears"||event=="chat_text_match";
     if(required&&(subject.empty()||subject.find_first_not_of(" \t\r\n")==std::string::npos))
         throw std::runtime_error("Enter a name or text pattern for this event.");
-    if(!a.value("chat",false)&&!a.value("overlay",false)&&!a.value("sound",false)&&!a.value("speech",false))
-        throw std::runtime_error("Choose at least one notification: banner, chat, sound, or speech.");
+    const auto timer_id = a.value("timer_id", std::string{});
+    if (event == "timer_remaining" && !find_timer(subject))
+        throw std::runtime_error("Choose a saved timer bar for the condition.");
+    if (!timer_id.empty() && !find_timer(timer_id))
+        throw std::runtime_error("Choose a saved timer bar to start.");
+    if (event == "timer_remaining" && makes_timer_cycle(a, subject, timer_id))
+        throw std::runtime_error("Choose a timer result that does not restart this timer directly or through other rules.");
+    if(!a.value("chat",false)&&!a.value("overlay",false)&&!a.value("sound",false)&&!a.value("speech",false)&&timer_id.empty())
+        throw std::runtime_error("Choose at least one result: banner, chat, sound, speech, or timer bar.");
 }
-enum class Ui {State,Action,Save,Preview,Export,Inspect,Import,Settings};
+enum class Ui {State,Action,Save,Preview,Export,Inspect,Import,Settings,TimerSave,TimerAction,TimerLayout};
+constexpr std::array ui_names = {"state", "action", "save", "preview", "export", "inspect", "import", "settings",
+    "timer_save", "timer_action", "timer_layout"};
 std::string bounded_string(const char* s,size_t maximum=max_bytes) {
     if(!s)return {};
     size_t len=0;while(len<=maximum&&s[len])++len;
@@ -355,9 +515,105 @@ Json arg(const HailstoneArgs* args,size_t n) {
     Json object=Json::object();
     for(const auto* key:{"id","name","event","enabled","category","section","subsection","zone_id","subject",
         "threshold","message","cooldown","chat","overlay","sound","speech","volume","tone","sound_file",
-        "speech_text","voice","rate","color","size","duration","overlay_x","overlay_y","overlay_locked","quiet"}) {
+        "speech_text","voice","rate","color","size","duration","overlay_x","overlay_y","overlay_locked","quiet",
+        "warning_at","warning_color","critical_at","critical_color","timer_id","alpha"}) {
         HailstoneValue field{};if(host->arg_field(host->host,args,n,key,&field))object[key]=value(field);
     }return object;
+}
+Json default_timer_layout(const Json& timers) {
+    static constexpr std::array columns = {.63, .33, .04};
+    for (const double x : columns) {
+        for (int row = 0; row < 8; ++row) {
+            const double y = .17 + .085 * row;
+            const auto nearby = [=](const Json& timer) {
+                return std::abs(timer.at("x").get<double>() - x) < .06 &&
+                    std::abs(timer.at("y").get<double>() - y) < .04;
+            };
+            if (std::none_of(timers.begin(), timers.end(), nearby)) return timer_geometry(x, y, 280, 74, false);
+        }
+    }
+    return timer_geometry(columns.front(), .17, 280, 74, false);
+}
+Json save_timer(const Json& raw) {
+    if (!raw.is_object()) return failure("Expected a timer definition.");
+    auto timer = timer_definition(raw);
+    auto id = raw.value("id", std::string{});
+    auto result = change([&] {
+        if (!id.empty()) {
+            auto* existing = find_timer(id);
+            if (!existing) throw std::runtime_error("This timer no longer exists. Reopen the editor.");
+            existing->update(timer);
+            return;
+        }
+        auto& timers = engine.config["timers"];
+        if (timers.size() >= max_timers) throw std::runtime_error("Sentinel holds up to 24 timer bars.");
+        do { id = "timer-" + std::to_string(++next_timer_id); } while (find_timer(id));
+        timer["id"] = id;
+        timer.update(default_timer_layout(timers));
+        timers.push_back(std::move(timer));
+    });
+    if (result.value("ok", false)) result["id"] = id;
+    return result;
+}
+Json timer_action(const std::string& op, const std::string& id) {
+    if (op == "lock" || op == "unlock") {
+        const bool locked = op == "lock";
+        if (engine.config.at("timers_locked") == locked) return success();
+        return change([&] { engine.config["timers_locked"] = locked; });
+    }
+    if (op == "group" || op == "separate") {
+        const bool grouped = op == "group";
+        if (engine.config.at("timers_grouped") == grouped) return success();
+        return change([&] { engine.config["timers_grouped"] = grouped; });
+    }
+    const auto* timer = find_timer(id);
+    if (!timer) return failure("Timer not found.");
+    if (op == "start") {
+        start_timer(*timer, now_ms());
+        return success();
+    }
+    if (op == "stop") {
+        timer_runs.erase(id);
+        return success();
+    }
+    if (op == "delete") {
+        auto result = change([&] {
+            auto& timers = engine.config["timers"];
+            timers.erase(std::find_if(timers.begin(), timers.end(), [&](const Json& entry) { return entry.at("id") == id; }));
+            for (auto& rule : engine.config["alerts"]) {
+                if (timer_condition(rule) == id) {
+                    rule["subject"] = unassigned_timer;
+                    rule["enabled"] = false;
+                }
+                if (rule.value("timer_id", "") == id) {
+                    rule["timer_id"] = unassigned_timer;
+                    rule["enabled"] = false;
+                }
+            }
+        });
+        if (result.value("ok", false)) timer_runs.erase(id);
+        return result;
+    }
+    return failure("Unknown timer action.");
+}
+Json save_timer_layout(const HailstoneArgs* args) {
+    const auto id = arg(args, 0).get<std::string>();
+    const bool grouped = id == "group";
+    auto* timer = grouped ? &engine.config.at("timer_group_layout") : find_timer(id);
+    if (!timer) return failure("Timer not found.");
+    auto layout = timer_geometry(arg(args, 1), arg(args, 2), arg(args, 3), arg(args, 4), arg(args, 5), grouped);
+    if (engine.config.at("timers_locked").get<bool>())
+        layout = {{"minimized", layout.at("minimized")}};
+    auto updated = *timer;
+    updated.update(layout);
+    if (updated == *timer) return success();
+    return change([&] { *timer = std::move(updated); });
+}
+Json save_group_alpha(const Json& value) {
+    auto& alpha = engine.config.at("timer_group_layout").at("alpha");
+    const int opacity = timer_alpha(value);
+    if (alpha == opacity) return success();
+    return change([&] { alpha = opacity; });
 }
 void output(HailstoneOut* out,const Json& j) {
     if(j.is_object()){host->out_begin_table(host->host,out);
@@ -375,6 +631,16 @@ Json state() {
     overlays.erase(std::remove_if(overlays.begin(),overlays.end(),[&](const auto& o){return o["expires"].template get<uint64_t>()<=now;}),overlays.end());
     Json showing=overlays;for(auto& o:showing)o["remaining"]=(o["expires"].get<uint64_t>()-now)/1000.0;
     Json result=engine.config;
+    result["timer_profile"] = std::to_string(timer_profile);
+    for (auto& timer : result["timers"]) {
+        const auto run = timer_runs.find(timer.at("id").get_ref<const std::string&>());
+        const bool started = run != timer_runs.end();
+        const bool running = started && run->second.deadline > now;
+        timer["running"] = running;
+        timer["finished"] = started && !running;
+        timer["remaining"] = running ? (run->second.deadline - now) / 1000.0 : 0.0;
+        timer["run_duration"] = started ? run->second.duration : timer.at("duration").get<int>();
+    }
     result["open"]=open;result["in_zone"]=snapshot.in_zone;result["character"]=snapshot.character;
     result["zone_id"]=snapshot.zone_id;
     char zone[128]{};if(host->zone_name)host->zone_name(host->host,snapshot.zone_id,zone,sizeof zone);
@@ -387,12 +653,19 @@ Json state() {
     result["hp"]=snapshot.hp?Json(*snapshot.hp):Json();result["mana"]=snapshot.mana?Json(*snapshot.mana):Json();
     result["endurance"]=snapshot.endurance?Json(*snapshot.endurance):Json();return result;
 }
+Json preview_rule(const Json& rule) {
+    const auto timer_id = rule.value("timer_id", std::string{});
+    if (!timer_id.empty() && (!snapshot.in_zone || !find_timer(timer_id)))
+        return failure("Enter the world and choose a saved timer bar to preview this result.");
+    deliver(engine.preview(rule, snapshot, now_ms()));
+    return success();
+}
 Json action(const std::string& op,const std::string& id) {
     if(op=="show")return set_window_open(true);
     if(op=="hide")return set_window_open(false);
     if(op=="clear_history"){history.clear();return success();}
     if(op=="rescan_sounds"){sounds=Audio::files(folder/"Sounds");return success();}
-    if(op=="test") {const auto* a=find(id);if(!a)return failure("Alert not found");deliver(engine.preview(*a,snapshot,now_ms()));return success();}
+    if(op=="test") {const auto* a=find(id);if(!a)return failure("Alert not found");return preview_rule(*a);}
     if(op=="on"||op=="off"||op=="toggle") {
         const auto r=change([&]{engine.config["enabled"]=op=="toggle"?!engine.config.value("enabled",true):op=="on";});
         if(r.value("ok",false)){cancel_activity();status=engine.config.value("enabled",true)?"Sentinel resumed.":"All alerts paused. Your library is saved.";}return r;
@@ -415,11 +688,20 @@ Json action(const std::string& op,const std::string& id) {
 }
 Json ui_call(Ui kind,const HailstoneArgs* args) {
     if(kind==Ui::State)return state();
+    if (kind == Ui::TimerSave || kind == Ui::TimerAction || kind == Ui::TimerLayout) {
+        if (!snapshot.in_zone || folder.empty()) return failure("Enter the world to use character timer bars.");
+        if (kind == Ui::TimerSave) return save_timer(arg(args, 0));
+        if (kind == Ui::TimerLayout) return save_timer_layout(args);
+        const auto op = arg(args, 0).get<std::string>();
+        const auto target = arg(args, 1);
+        if (op == "group_alpha") return save_group_alpha(target);
+        return timer_action(op, target.get<std::string>());
+    }
     if(kind==Ui::Action) {const auto op=arg(args,0),id=arg(args,1);return action(op.is_string()?op.get<std::string>():"",id.is_string()?id.get<std::string>():"");}
     if(kind==Ui::Save||kind==Ui::Preview) {
         const auto raw=arg(args,0);if(!raw.is_object())return failure("Expected an alert");
         auto a=normalize_alert(raw);
-        if(kind==Ui::Preview){deliver(engine.preview(a,snapshot,now_ms()));return success();}
+        if(kind==Ui::Preview)return preview_rule(a);
         validate_rule(a);
         const auto requested=raw.value("id",std::string{});
         if(!requested.empty()&&!find(requested))return failure("This alert no longer exists. Reopen the editor.");
@@ -436,7 +718,11 @@ Json ui_call(Ui kind,const HailstoneArgs* args) {
     if(kind==Ui::Inspect||kind==Ui::Import) {
         const auto text=arg(args,0);if(!text.is_string())return failure("Paste a Sentinel export first");
         auto list=parse_import(text.get<std::string>());
-        for(auto& a:list)a["enabled"]=false;
+        for (auto& a : list) {
+            a["enabled"] = false;
+            if (!timer_condition(a).empty()) a["subject"] = unassigned_timer;
+            if (a.contains("timer_id")) a["timer_id"] = unassigned_timer;
+        }
         if(kind==Ui::Inspect)return {{"ok",true},{"alerts",list}};
         if(list.size()+engine.config["alerts"].size()>max_alerts)return failure("There is not enough room. Sentinel holds 128 alerts.");
         auto result=change([&]{for(auto a:list){a["id"]=new_id();engine.config["alerts"].push_back(a);}});
@@ -468,7 +754,9 @@ void command(void*,const char* line) noexcept {
             return;
         }
         if(op=="list"){size_t i=0;for(const auto& a:engine.config["alerts"])say(std::to_string(++i)+". "+a.value("name",std::string{})+(a.value("enabled",true)?" [on]":" [off]"));return;}
-        if(op=="test"){size_t n=0;input>>n;const auto& list=engine.config["alerts"];if(n&&n<=list.size()){deliver(engine.preview(list[n-1],snapshot,now_ms()));return;}say("Use /sentinel test <alert number>. /sentinel list shows the numbers.");return;}
+        if(op=="test"){size_t n=0;input>>n;const auto& list=engine.config["alerts"];if(n&&n<=list.size()){
+            const auto result=preview_rule(list[n-1]);if(!result.value("ok",false))say(result.value("error",std::string{}));return;}
+            say("Use /sentinel test <alert number>. /sentinel list shows the numbers.");return;}
         if(op=="on"||op=="off"||op=="toggle"||op=="hide"){const auto result=action(op,"");say(result.value("ok",false)?status:result.value("error",std::string{}));return;}
         say("/sentinel opens the library. Commands: show, hide, on, off, toggle, list, test <number>.");
     }catch(...){log_error("Command");}
@@ -479,28 +767,31 @@ HAILSTONE_API void InitializePlugin() noexcept {
         if(!host||host->size<offsetof(PluginHostApi,character_config_dir)+sizeof(host->character_config_dir))return;
         if(initialized)return;
         initialized=true;engine=Engine();presentation_defaults(engine.config);folder.clear();snapshot={};
+        timer_runs.clear(); ++timer_profile;
         history.clear();overlays.clear();error.clear();load_failed=false;last_poll=0;
         load_window_preferences();
 #ifndef SENTINEL_NO_AUDIO
         audio=std::make_unique<sentinel::Audio>();
 #endif
         host->add_command(host->host,"/sentinel",command,nullptr);
-        static Ui kinds[]={Ui::State,Ui::Action,Ui::Save,Ui::Preview,Ui::Export,Ui::Inspect,Ui::Import,Ui::Settings};
-        const char* names[]={"state","action","save","preview","export","inspect","import","settings"};
-        for(size_t i=0;i<8;++i)host->add_ui_function(host->host,names[i],ui_dispatch,&kinds[i]);
+        static std::array kinds = {Ui::State, Ui::Action, Ui::Save, Ui::Preview, Ui::Export, Ui::Inspect, Ui::Import,
+            Ui::Settings, Ui::TimerSave, Ui::TimerAction, Ui::TimerLayout};
+        static_assert(kinds.size() == ui_names.size());
+        for (size_t i = 0; i < kinds.size(); ++i) host->add_ui_function(host->host, ui_names[i], ui_dispatch, &kinds[i]);
         if(host->add_menu)host->add_menu(host->host,"Sentinel alerts","/sentinel");
         refresh_snapshot();say("Ready. Open Sentinel from the game menu or type /sentinel.");
     }catch(...){log_error("Initialize");}
 }
 HAILSTONE_API void ShutdownPlugin() noexcept {
     try {cancel_activity();audio.reset();if(host&&initialized){host->remove_command(host->host,"/sentinel");
-        for(const auto* name:{"state","action","save","preview","export","inspect","import","settings"})host->remove_ui_function(host->host,name);}
+        for (const auto* name : ui_names) host->remove_ui_function(host->host, name);}
+        timer_runs.clear();
         initialized=false;folder.clear();snapshot={};history.clear();overlays.clear();}
     catch(...){log_error("Shutdown");}
 }
 HAILSTONE_API void OnPulse() noexcept {
     try {if(!initialized)return;const auto now=now_ms();if(now>=last_poll&&now-last_poll<100)return;last_poll=now;
-        refresh_snapshot();for(const auto& f:engine.evaluate(snapshot,now))deliver(f);}
+        refresh_snapshot();sample_timers(now);for(const auto& f:engine.evaluate(snapshot,now))deliver(f);}
     catch(...){log_error("Observation");}
 }
 HAILSTONE_API int OnIncomingChat(const char* line,uint32_t color) noexcept {

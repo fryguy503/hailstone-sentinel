@@ -301,7 +301,7 @@ void host_chat_formats() {
     check(e.chat(s, "Friend says, 'Your target resisted the Fire spell.'", 0, 2300).empty(), "Quoted resist message excluded");
 }
 void config_and_sharing() {
-    check(sentinel::events().size() == 25, "Original and buff/debuff arrival event types catalogued");
+    check(sentinel::events().size() == 26, "Existing and timer threshold event types catalogued");
     check(sentinel::presets().size() >= 32, "Preset library includes buff/debuff arrivals");
     for (const auto* event : {"buff_received", "debuff_received"}) {
         const auto a = sentinel::normalize_alert({{"event", event}});

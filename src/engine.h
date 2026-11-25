@@ -11,6 +11,7 @@
 
 namespace sentinel {
 using Json = nlohmann::json;
+inline constexpr int max_timer_seconds = 24 * 60 * 60;
 
 struct Entity {
     uint32_t id = 0;
@@ -28,6 +29,11 @@ struct Buff {
     bool invisible = false;
     std::optional<bool> beneficial;
 };
+struct TimerReading {
+    std::string name;
+    uint64_t remaining_ms;
+    std::optional<uint64_t> previous_ms;
+};
 struct Snapshot {
     bool in_zone = false, alive = false;
     uint32_t zone_id = 0;
@@ -37,6 +43,7 @@ struct Snapshot {
     std::vector<Entity> entities;
     std::vector<Buff> buffs;
     bool buffs_complete = true;
+    std::map<std::string, TimerReading> timers;
 };
 struct Fired {
     std::string id, name, message, speech;

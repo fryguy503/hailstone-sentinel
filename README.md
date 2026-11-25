@@ -22,10 +22,11 @@ Packages are available for **Windows x64**, **Linux x64**, and **macOS Apple Sil
 
 ## Make it yours
 
-- **25 event types.** Health, mana, endurance, party and pet warnings, received buffs and debuffs, fading or missing buffs, nearby spawns, target casts, chat channels, custom text patterns, fizzles, resists, and invisibility warnings.
+- **26 event types.** Health, mana, endurance, party and pet warnings, received buffs and debuffs, fading or missing buffs, nearby spawns, target casts, chat channels, custom text patterns, fizzles, resists, invisibility warnings, and timer thresholds.
 - **A guided rule builder.** Choose a trigger, pick notification styles, and read a plain-language summary before saving.
 - **A familiar, compact window.** Follows your active client theme and palette. Starter kits use a searchable list with details for the selected preset.
 - **A searchable library.** Organize up to 128 alerts with categories, sections, subsections, and optional zone restrictions.
+- **Timer bars.** Start named countdowns manually or with alert rules. Use a timer's remaining time to trigger another alert.
 - **Notifications that fit the moment.** Colored banners in five sizes, local chat, five built-in chimes, custom WAV files, and platform speech.
 - **A comfortable HUD.** Move the banner stack, lock it in place, or mute audio with Quiet mode. Master Pause stops automatic alerts while preserving your library.
 - **Remembered window visibility.** Sentinel opens on first use, then keeps your last open or closed state through zoning and reloads.
@@ -52,6 +53,26 @@ Sentinel only observes and notifies. It does not cast, target, move, send chat t
 Percentage rules alert once when the threshold is reached. They rearm after recovery above the threshold plus three percentage points. A cooldown limits notifications; it does not repeat an alert while a condition remains true. Group members and targets are tracked independently. Logging in without a pet does not trigger a lost-pet warning.
 
 For **I receive a buff** and **I receive a debuff**, leave **Exact spell name** empty to watch all effects of that kind, or enter one full spell name (ignoring letter case). The automatic message names the new effects; use `{L}` to include that description in custom messages or speech. Effects already present when you log in, zone, or enable a rule establish its starting state. Refreshing a timer or moving an effect between slots stays quiet. An effect can alert again after Sentinel observes it disappear and return. These events watch effects in your own buff/song slots; instant spells with no lasting effect are not included.
+
+## Timer bars
+
+Open `/sentinel`, choose **Timer bars**, then **+ New timer**. Give the timer a name, set a duration from 1 to 86,400 seconds, and pick one of eight starting colors. **Save & start** begins the countdown immediately. **Save timer** keeps it ready to start later. Each character can save up to 24 timers and start, restart, or stop them independently.
+
+For a visible reminder, set a warning and a critical color in seconds remaining. A 90-second **Check respawn** timer could start cyan, turn yellow at 30 seconds, and turn red at 10 seconds. Each threshold starts at zero, which turns that color change off.
+
+With **Lock timer bars** cleared, drag a running bar by its title and resize it from the lower-right corner. Turn on **Group timer bars** to put active countdowns in one movable, resizable **Sentinel timers** pane. **Minimize** makes an individual countdown compact in either layout. In grouped mode, **Minimize pane** and **Expand pane** control the whole pane. Lock the overlays to let game clicks pass through them.
+
+Each timer has its own **Opacity (%)** in the timer editor. In grouped mode, use **Pane opacity (%)** and **Apply pane opacity** to adjust the whole pane. Both controls range from 10% to 100%.
+
+Timer definitions and layout mode are saved per server and character, along with separate position, size, and minimized settings for individual bars and the grouped pane. Running countdowns continue when you zone on the same character. Switching characters or reloading the plugin clears the running countdowns. **Master Pause** pauses automatic rules and the timers they would start. You can still start timers by hand, and active timers keep counting.
+
+### Start a timer from chat and get an alert when it ends
+
+1. Save a 90-second timer named **Gate check** in **Timer bars**.
+2. In **My alerts** → **+ New alert**, choose **Chat matches a pattern** and enter `*the gate has opened*` as the **Full-line wildcard pattern**. Select **Gate check** under **Start or restart a timer**. The timer can be the only result or run alongside your other notifications.
+3. Create another alert with **A timer bar reaches its threshold**. Select **Gate check** under **Timer bar** and enter `0` for **Seconds remaining** to fire when it ends. Turn on **Play a sound** and **Chat message**, with your own message such as `Check the gate again.` You can also show a banner or use speech. Set a positive threshold, such as `10`, for an earlier warning.
+
+Imported rules start disabled and need their timer selections set again on the destination character. Deleting a timer disables the rules that reference it so you can choose a replacement. Sentinel rejects rule chains that would start timers in a loop.
 
 ## Text patterns and messages
 

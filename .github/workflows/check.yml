@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 env:
-  SENTINEL_VERSION: 1.0.0-preview.5
+  SENTINEL_VERSION: 1.0.0-preview.6
 jobs:
   native:
     name: Build and check ${{ matrix.platform }}

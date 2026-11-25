@@ -10,7 +10,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 lua tools/check_ui.lua
 python -m unittest discover -s tests -p "test_*.py"
-python tools/package.py --build-dir build --version 1.0.0-preview.5 --platform windows-x64 --out release/windows-x64
+python tools/package.py --build-dir build --version 1.0.0-preview.6 --platform windows-x64 --out release/windows-x64
 ```
 
 The Release DLL uses the static MSVC runtime. The output contains a deterministic ZIP and its platform manifest. Do not commit build output or private signing keys. Optional `--sign-tool <hailstone_sign>` and `--sign-key <existing-secret-file>` sign the final manifests; keep using the same key after players pin it.
@@ -27,7 +27,7 @@ cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
 codesign --force --sign - --timestamp=none build/sentinel.dylib
 codesign --verify --strict build/sentinel.dylib
-python3 tools/package.py --build-dir build --version 1.0.0-preview.5 --platform macos-arm64 --out release/macos-arm64
+python3 tools/package.py --build-dir build --version 1.0.0-preview.6 --platform macos-arm64 --out release/macos-arm64
 ```
 
 Mac playback uses CoreAudio through miniaudio; native speech uses AVFoundation. No third-party speech program is needed. The normal smoke test stays silent. Set `SENTINEL_TEST_SPEECH=1` only for an explicit audible speech check on a real Mac. The distributed library is ad-hoc signed, not Developer ID signed or notarized.
@@ -35,7 +35,7 @@ Mac playback uses CoreAudio through miniaudio; native speech uses AVFoundation. 
 The read-only CI workflow builds/tests all three platforms, verifies architectures, signs the Mac library, and uploads one artifact per platform. Download those artifacts without modifying the ZIPs, then produce one combined manifest:
 
 ```sh
-python3 tools/package.py --merge downloaded/windows/hailstone-addon.txt downloaded/linux/hailstone-addon.txt downloaded/macos/hailstone-addon.txt --version 1.0.0-preview.5 --out release/v1.0.0-preview.5 --root-manifest
+python3 tools/package.py --merge downloaded/windows/hailstone-addon.txt downloaded/linux/hailstone-addon.txt downloaded/macos/hailstone-addon.txt --version 1.0.0-preview.6 --out release/v1.0.0-preview.6 --root-manifest
 ```
 
 Merge verifies matching metadata/shared files, all three expected platforms, ZIP paths, exact sizes, and SHA-256 values. It preserves ZIP bytes, including Mac signatures. `--root-manifest` writes absolute release URLs so the repository link works for prereleases. Publish the combined manifest and all three ZIPs together.

@@ -275,7 +275,8 @@ Json low_health_rule() {
 void actions_and_persistence() {
     Fixture f; f.start();
     check(f.commands.count("/sentinel") + f.commands.count("sentinel") == 1, "one Sentinel command registered");
-    for (const char* name : {"state", "action", "save", "preview", "export", "inspect", "import", "settings"})
+    for (const char* name : {"state", "action", "save", "preview", "export", "inspect", "import", "settings",
+         "timer_save", "timer_action", "timer_layout"})
         check(f.functions.count(name) == 1, std::string("UI API available: ") + name);
     const size_t initial = f.count();
     const auto saved = f.save(low_health_rule());
@@ -626,12 +627,193 @@ void received_effect_classification_cache_is_zone_scoped() {
     f.buffs.clear();f.tick();put_known_buff(f,0,500,"Zone ward","Beneficial");f.tick();
     check(chat_count(f,"ZONE_SCOPED_BUFF")==2,"new-zone classification becomes usable on a later actual receipt");
 }
+
+void timer_bars_save_layout_and_keep_independent_deadlines() {
+    Fixture f;
+    const auto old_dir = f.root / f.character;
+    fs::create_directories(old_dir);
+    const Json old_settings = {{"version", 1}, {"enabled", true}, {"alerts", Json::array({low_health_rule()})}};
+    { std::ofstream out(old_dir / "config.json"); out << old_settings.dump(); }
+    f.start();
+    check(f.state().at("timers").empty() && f.count() == 1, "older settings keep alerts and start with an empty timer list");
+    Json draft = {{"name", " mez refresh "}, {"duration", 6}, {"color", "purple"}, {"alpha", 70},
+        {"warning_at", 4}, {"warning_color", "yellow"}, {"critical_at", 2}, {"critical_color", "red"}};
+    auto save = [&](const Json& timer) { return f.call("timer_save", Json::array({timer})); };
+    auto action = [&](const std::string& op, const std::string& id = "") {
+        return f.call("timer_action", Json::array({op, id})).value("ok", false);
+    };
+    const auto first = save(draft).at("id").get<std::string>();
+    auto other = draft;
+    other["name"] = "Pull in";
+    other["duration"] = 20;
+    const auto second = save(other).at("id").get<std::string>();
+    check(first != second, "timer definitions have distinct IDs");
+    auto read = [&](const std::string& id) {
+        const auto timers = f.state().at("timers");
+        const auto it = std::find_if(timers.begin(), timers.end(), [&](const Json& timer) { return timer.at("id") == id; });
+        check(it != timers.end(), "timer exists in SDK state");
+        return *it;
+    };
+    auto layout = [&](double x, double y, double width, double height, bool minimized) {
+        return f.call("timer_layout", Json::array({first, x, y, width, height, minimized})).value("ok", false);
+    };
+    check(read(first).at("name") == "mez refresh", "display name trims surrounding spaces");
+    check(read(first).at("y") != read(second).at("y"), "new bars start in different positions");
+    check(layout(.2, .3, 320, 90, false), "save a drag and resize through SDK layout");
+    check(f.state().at("timers_grouped") == false, "separate bars are the default layout");
+    check(action("group") && f.state().at("timers_grouped") == true, "grouped mode is visible to the HUD");
+    check(f.call("timer_action", Json::array({"group_alpha", 58})).value("ok", false), "save independent group pane opacity");
+    check(!f.call("timer_action", Json::array({"group_alpha", 0})).value("ok", true), "reject invisible pane opacity");
+    check(f.call("timer_layout", Json::array({"group", .5, .4, 400, 410, false})).value("ok", false), "move and resize the group pane");
+    check(action("separate") && read(first).at("x") == .2 && read(first).at("width") == 320,
+        "switching views keeps each individual bar position and size");
+    check(action("group"), "remember grouped mode across reload");
+    check(action("lock") && f.state().at("timers_locked") == true, "lock setting is visible to overlay");
+    check(layout(.8, .6, 480, 100, true), "locked timers can be minimized");
+    auto state = read(first);
+    check(state.at("x") == .2 && state.at("y") == .3 && state.at("width") == 320 && state.at("height") == 90 &&
+        state.at("minimized") == true, "locked layout keeps its geometry and saves minimize state");
+    check(action("start", first) && action("start", second), "start two independent timers");
+    f.tick();
+    check(read(first).at("remaining") == 5 && read(second).at("remaining") == 19, "countdowns use separate deadlines");
+    draft["id"] = first;
+    draft["duration"] = 8;
+    check(save(draft).value("ok", false), "edit a running timer");
+    state = read(first);
+    check(state.at("duration") == 8 && state.at("run_duration") == 6 && state.at("remaining") == 5,
+        "an edit preserves the deadline and original duration of the current run");
+    check(action("start", first) && read(first).at("remaining") == 8, "restart uses the saved duration");
+    check(f.action("off").value("ok", false) && read(first).at("running") == true, "pausing automatic alerts leaves manual timers running");
+
+    const auto alice_profile = f.state().at("timer_profile");
+    OnBeginZone();
+    f.player.in_zone = 0;
+    SetGameState(GAMESTATE_LOGGINGIN);
+    f.tick();
+    check(!action("stop", first), "commands cannot change a stale character overlay in transit");
+    f.player.zone_id = 3;
+    f.player.in_zone = 1;
+    SetGameState(GAMESTATE_INGAME);
+    OnZoned();
+    f.tick();
+    check(f.state().at("timer_profile") == alice_profile && read(first).at("remaining") == 6,
+        "zoning preserves the current character countdown and accounts for transit time");
+    for (int i = 0; i < 6; ++i) f.tick();
+    state = read(first);
+    check(state.at("running") == false && state.at("finished") == true && state.at("remaining") == 0,
+        "a deadline transitions to finished at zero");
+    check(read(second).at("running") == true, "finishing a timer does not stop another");
+    check(action("stop", first) && read(first).at("finished") == false, "stopping clears the finished display");
+
+    other["duration"] = 1.5;
+    check(!save(other).value("ok", true), "fractional durations are invalid");
+    other["duration"] = 20;
+    other["critical_at"] = 4;
+    check(!save(other).value("ok", true) && f.state().at("timers").size() == 2, "invalid thresholds do not change settings");
+    f.choose("Bob");
+    check(f.state().at("timers").empty() && f.state().at("timer_profile") != alice_profile, "character changes isolate timers");
+    f.choose("Alice");
+    check(read(second).at("running") == false && f.state().at("timers_locked") == true,
+        "returning to a character restores settings with idle timers");
+    check(action("start", first), "start before reload");
+    f.stop();
+    f.start();
+    state = read(first);
+    check(state.at("x") == .2 && state.at("width") == 320 && state.at("minimized") == true && state.at("alpha") == 70 &&
+        state.at("running") == false && state.at("duration") == 8, "reload restores layout and duration but drops runtime state");
+    check(f.count() == 1, "saving timer settings preserves the character's existing alerts");
+    const auto grouped = f.state();
+    check(grouped.at("timers_grouped") == true && grouped.at("timer_group_layout").at("x") == .5 &&
+        grouped.at("timer_group_layout").at("height") == 410 && grouped.at("timer_group_layout").at("alpha") == 58,
+        "reload restores the separate group pane geometry, opacity and mode");
+    check(action("delete", first) && !action("start", first) && f.state().at("timers").size() == 1, "deleting a timer removes it from state and actions");
+}
+
+void chat_can_start_a_timer_and_complete_a_second_rule() {
+    Fixture f;
+    f.start();
+    Json timer = {{"name", "Gate check"}, {"duration", 3}, {"color", "cyan"}, {"warning_at", 0},
+        {"warning_color", "yellow"}, {"critical_at", 0}, {"critical_color", "red"}};
+    const auto gate = f.call("timer_save", Json::array({timer})).at("id").get<std::string>();
+    timer["name"] = "Prepare";
+    const auto prepare = f.call("timer_save", Json::array({timer})).at("id").get<std::string>();
+    const Json text_trigger = {{"name", "Encounter call"}, {"event", "chat_text_match"}, {"subject", "*open the gates*"},
+        {"chat", false}, {"overlay", false}, {"sound", false}, {"timer_id", gate}, {"cooldown", 0}};
+    const auto trigger_id = f.save(text_trigger).at("id").get<std::string>();
+    const Json finish_alert = {{"name", "Gate open"}, {"event", "timer_remaining"}, {"subject", gate}, {"threshold", 0},
+        {"chat", true}, {"overlay", true}, {"sound", true}, {"cooldown", 0}};
+    const auto finish_id = f.save(finish_alert).at("id").get<std::string>();
+    auto two_seconds_left = finish_alert;
+    two_seconds_left["name"] = "Prepare on approach";
+    two_seconds_left["threshold"] = 2;
+    two_seconds_left["message"] = "Prepare now";
+    two_seconds_left["timer_id"] = prepare;
+    check(f.save(two_seconds_left).value("ok", false), "a timer condition can also start a different timer");
+    auto cycle = two_seconds_left;
+    cycle["subject"] = prepare;
+    cycle["timer_id"] = gate;
+    check(!f.save(cycle).value("ok", true), "indirect timer cycles are rejected");
+    cycle["timer_id"] = prepare;
+    check(!f.save(cycle).value("ok", true), "direct timer cycles are rejected");
+
+    f.chat.clear();
+    OnIncomingChat("Guard Bob says, 'Open the gates!'", 0);
+    auto state = f.state();
+    check(state.at("timers")[0].at("running") == true && state.at("timers")[1].at("running") == false && f.chat.empty(),
+        "a chat rule can start a named timer as its only result");
+    f.tick();
+    check(chat_count(f, "Prepare now") == 1 && f.state().at("timers")[1].at("running") == true,
+        "crossing a nonzero threshold delivers a result and starts the chained timer");
+    check(f.action("test", trigger_id).value("ok", false) && f.state().at("timers")[0].at("remaining") == 2,
+        "preview never restarts an active live countdown");
+    f.tick();
+    check(chat_count(f, "Gate check finished.") == 0, "zero-second trigger waits until the deadline");
+    f.tick();
+    state = f.state();
+    check(chat_count(f, "Gate check finished.") == 1 && state.at("timers")[0].at("finished") == true &&
+        state.at("overlays").back().at("message") == "Gate check finished.", "completion goes through usual chat and banner delivery");
+    f.tick();
+    OnBeginZone(); f.player.in_zone = 0; SetGameState(GAMESTATE_LOGGINGIN); f.tick();
+    f.player.in_zone = 1; f.player.zone_id = 3; SetGameState(GAMESTATE_INGAME); OnZoned(); f.tick();
+    check(chat_count(f, "Gate check finished.") == 1 && chat_count(f, "Prepare now") == 1,
+        "old crossings are not replayed during zoning");
+    OnIncomingChat("Guard Bob says, 'Open the gates!'", 0);
+    f.tick(); f.tick(); f.tick();
+    check(chat_count(f, "Gate check finished.") == 2 && chat_count(f, "Prepare now") == 2, "new runs rearm both thresholds");
+
+    check(f.action("test", trigger_id).value("ok", false) && f.state().at("timers")[0].at("running") == true,
+        "preview demonstrates an idle timer result");
+    f.tick(); f.tick(); f.tick();
+    check(chat_count(f, "Gate check finished.") == 2 && chat_count(f, "Prepare now") == 2,
+        "preview countdowns do not trigger ordinary timer conditions");
+    OnIncomingChat("Guard Bob says, 'Open the gates!'", 0);
+    check(f.action("off").value("ok", false), "pause rules with a countdown active");
+    f.tick(); f.tick(); f.tick();
+    check(f.action("on").value("ok", false), "resume rules after countdown elapsed");
+    f.tick();
+    check(chat_count(f, "Gate check finished.") == 2, "paused completions are consumed without later notification");
+
+    const auto shared = f.call("export", Json::array({trigger_id}));
+    const auto inspected = f.call("inspect", Json::array({shared}));
+    check(inspected.at("alerts")[0].at("timer_id") == "unassigned-timer", "import review clears local-only timer bindings");
+    check(f.call("import", Json::array({shared})).value("ok", false), "import accepts a timer-only result for re-selection");
+    const auto imported_id = f.state().at("alerts").back().at("id").get<std::string>();
+    check(!f.action("toggle_alert", imported_id).value("ok", true), "unbound imported rules cannot be enabled");
+    check(f.call("timer_action", Json::array({"delete", gate})).value("ok", false), "remove timer used by saved rules");
+    state = f.state();
+    check(state.at("alerts")[0].at("timer_id") == "unassigned-timer" && state.at("alerts")[0].at("enabled") == false &&
+        state.at("alerts")[1].at("subject") == "unassigned-timer" && state.at("alerts")[1].at("enabled") == false,
+        "deleting a linked timer atomically disables and unbinds both kinds of rule");
+    check(!f.action("toggle_alert", finish_id).value("ok", true), "a removed timer condition must be re-selected before enabling");
+}
 } // namespace
 
 int main() {
     try {
         actions_and_persistence(); sharing_and_validation(); evaluation_and_lifecycle(); snapshot_adapter(); damaged_settings_are_preserved(); incomplete_rules_cannot_be_enabled(); window_visibility_survives_zoning_and_reload(); damaged_window_preferences_do_not_reopen_or_change_alerts(); unwritable_first_use_does_not_create_a_popup_loop();
         received_effects_use_known_spell_types();received_effects_do_not_guess_or_replay_late_metadata();incomplete_buff_polls_preserve_arrivals_and_missing_rules();received_effect_classification_cache_is_zone_scoped();
+        timer_bars_save_layout_and_keep_independent_deadlines();
+        chat_can_start_a_timer_and_complete_a_second_rule();
         std::cout << "Plugin integration checks passed: " << checks << '\n';
         return 0;
     } catch (const std::exception& e) {

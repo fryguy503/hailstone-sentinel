@@ -23,6 +23,7 @@ constexpr EventDef definitions[] = {
     {"target_health_below", "My target's health is low", "Combat", "", "Health (%)", "Each target rearms independently."},
     {"group_health_below", "A group member's health is low", "Party", "Player name (optional)", "Health (%)", "Watch other group members, or enter one exact name. Each member rearms independently."},
     {"buff_fading", "A buff is about to fade", "Buffs", "Exact buff name", "Seconds remaining", "Warn when a known, timed buff reaches this many seconds remaining."},
+    {"timer_remaining", "A timer bar reaches its threshold", "Timer bars", "Timer bar", "Seconds remaining", "Choose a saved timer. Use 0 for when it finishes. The condition can fire once per countdown."},
     {"buff_missing", "A required buff is missing", "Buffs", "Exact buff name", "", "Warn once while the buff is missing; it rearms when the buff returns."},
     {"buff_received", "I receive a buff", "Buffs", "Exact spell name (optional)", "", "Watch newly gained beneficial effects. Leave the name empty for any buff. Existing effects on login, zoning or enabling this rule, and timer refreshes, stay quiet."},
     {"debuff_received", "I receive a debuff", "Buffs", "Exact spell name (optional)", "", "Watch newly gained harmful effects. Leave the name empty for any debuff. Existing effects on login, zoning or enabling this rule, and timer refreshes, stay quiet."},
@@ -124,7 +125,7 @@ bool percentage(const std::string& e) { return e.size() >= 6 && e.compare(e.size
 bool buff_arrival(const std::string& e) { return e == "buff_received" || e == "debuff_received"; }
 bool requires_subject(const std::string& e) {
     return e == "player_health_below" || e == "player_mana_below" || e == "buff_fading" ||
-        e == "buff_missing" || e == "spawn_appears" || e == "player_appears" || e == "chat_text_match";
+        e == "buff_missing" || e == "spawn_appears" || e == "player_appears" || e == "chat_text_match" || e == "timer_remaining";
 }
 bool known(const std::optional<double>& x) { return x && std::isfinite(*x) && *x >= 0 && *x <= 100; }
 std::string number(double x) {
@@ -298,6 +299,8 @@ Json normalize_alert(const Json& input) {
     if (out["name"].get<std::string>().empty()) out["name"] = find_event(e)->label;
     if (out["category"].get<std::string>().empty()) out["category"] = "General";
     if (out["section"].get<std::string>().empty()) out["section"] = "General";
+    if (e == "timer_remaining") out["threshold"] = std::floor(num(input, "threshold", 0, 0, max_timer_seconds));
+    if (auto timer_id = str(input, "timer_id", "", 80); !timer_id.empty()) out["timer_id"] = std::move(timer_id);
     return out;
 }
 Json normalize_config(const Json& input) {
@@ -333,9 +336,10 @@ std::string describe(const Json& input) {
     const Json a = normalize_alert(input);
     const std::string e = a["event"], subject = a["subject"];
     std::string text = find_event(e)->label;
-    if (!subject.empty()) text += " (" + subject + ")";
+    if (!subject.empty() && e != "timer_remaining") text += " (" + subject + ")";
     if (percentage(e)) text += " at " + number(a["threshold"].get<double>()) + "%";
     else if (e == "buff_fading") text += " within " + number(a["threshold"].get<double>()) + " seconds";
+    else if (e == "timer_remaining") text += " at " + number(a["threshold"].get<double>()) + " seconds remaining";
     else if (e == "spawn_appears" || e == "player_appears") text += " within " + number(a["threshold"].get<double>()) + " units";
     if (a["zone_id"].get<uint32_t>()) text += " in zone " + std::to_string(a["zone_id"].get<uint32_t>());
     return text;
@@ -370,7 +374,7 @@ Json parse_import(std::string text) {
         Json rule = normalize_alert(a);
         const std::string event = rule["event"];
         if (requires_subject(event) && rule["subject"].get<std::string>().empty()) throw std::invalid_argument("An imported alert needs a subject or pattern.");
-        if (!rule["chat"].get<bool>() && !rule["overlay"].get<bool>() && !rule["sound"].get<bool>() && !rule["speech"].get<bool>())
+        if (!rule["chat"].get<bool>() && !rule["overlay"].get<bool>() && !rule["sound"].get<bool>() && !rule["speech"].get<bool>() && !rule.contains("timer_id"))
             throw std::invalid_argument("An imported alert has no notification outputs.");
         out.push_back(std::move(rule));
     }
@@ -499,6 +503,15 @@ std::vector<Fired> Engine::evaluate(const Snapshot& s, uint64_t now) {
         if (e == "health_below") resource(0, s.hp, "Your", "health");
         else if (e == "mana_below") resource(0, s.mana, "Your", "mana");
         else if (e == "endurance_below") resource(0, s.endurance, "Your", "endurance");
+        else if (e == "timer_remaining") {
+            if (const auto it = s.timers.find(subject); it != s.timers.end()) {
+                const auto& reading = it->second;
+                const auto threshold_ms = static_cast<uint64_t>(threshold) * 1000;
+                edge = reading.remaining_ms <= threshold_ms && (!reading.previous_ms || *reading.previous_ms > threshold_ms);
+                if (edge) detail = reading.remaining_ms == 0 ? reading.name + " finished." :
+                    reading.name + " has " + std::to_string((reading.remaining_ms + 999) / 1000) + " seconds remaining.";
+            }
+        }
         else if (e == "pet_lost") {
             if (r.pet_initialized && r.pet_id && !s.pet_id) { edge = true; detail = "Your pet disappeared or charm broke."; }
             r.pet_initialized = true; r.pet_id = s.pet_id;
