@@ -433,7 +433,7 @@ void dismiss_finished_timers(uint64_t now) {
     std::erase_if(timer_runs, [now](const auto& entry) {
         const auto& [id, run] = entry;
         if (run.deadline > now) return false;
-        const auto* timer = find_timer(id);
+        const Json* timer = find_timer(id);
         if (!timer) return false;
         const int delay = timer->at("dismiss_after").get<int>();
         return delay > 0 && now - run.deadline >= static_cast<uint64_t>(delay) * 1000;
